@@ -248,16 +248,20 @@ class NavigationSkillContainer(Module):
             return None
 
         # Track continuity: only reuse the prior box when the query is unchanged.
-        prev_box = self._last_grounding_bbox if query == self._last_grounding_query else None
+        if query != self._last_grounding_query:
+            self._last_grounding_query = query
+            self._last_grounding_bbox = None
         bbox = get_object_bbox(
             self._vl_model,
             self._latest_image,
             query,
             detector=self._get_grounding_detector(),
-            prev_box=prev_box,
+            prev_box=self._last_grounding_bbox,
         )
-        self._last_grounding_query = query
-        self._last_grounding_bbox = bbox
+        # Keep the last known box through a transient miss so the next frame can
+        # re-lock onto the same instance instead of re-acquiring from scratch.
+        if bbox is not None:
+            self._last_grounding_bbox = bbox
         return bbox
 
     def _navigate_using_semantic_map(self, query: str) -> str:
