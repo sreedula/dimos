@@ -25,6 +25,19 @@ from dimos.perception.detection.detectors.base import Detector
 from dimos.perception.detection.type.detection2d.imageDetections2D import ImageDetections2D
 from dimos.utils.data import get_data
 from dimos.utils.gpu_utils import is_cuda_available
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
+
+
+def _is_mps_available() -> bool:
+    """True if PyTorch's Apple-Silicon MPS backend is usable."""
+    try:
+        import torch
+
+        return bool(torch.backends.mps.is_available())
+    except Exception:
+        return False
 
 
 class YoloePromptMode(Enum):
@@ -85,6 +98,8 @@ class Yoloe2DDetector(Detector):
             self.device = device
         elif is_cuda_available():  # type: ignore[no-untyped-call]
             self.device = "cuda"
+        elif _is_mps_available():
+            self.device = "mps"
         else:
             self.device = "cpu"
 
@@ -137,7 +152,22 @@ class Yoloe2DDetector(Detector):
             if self._visual_prompts is not None:
                 track_kwargs["visual_prompts"] = self._visual_prompts
 
-            results = self.model.track(**track_kwargs)  # type: ignore[arg-type]
+            try:
+                results = self.model.track(**track_kwargs)  # type: ignore[arg-type]
+            except Exception:
+                # A GPU/MPS backend op can be unsupported for a given input; fall
+                # back to CPU once (permanently for this detector) instead of
+                # failing. CPU is the baseline that always works.
+                if self.device == "cpu":
+                    raise
+                logger.warning(
+                    "YOLOE inference on '%s' failed; falling back to CPU.",
+                    self.device,
+                    exc_info=True,
+                )
+                self.device = "cpu"
+                track_kwargs["device"] = "cpu"
+                results = self.model.track(**track_kwargs)  # type: ignore[arg-type]
 
         detections = ImageDetections2D.from_ultralytics_result(image, results)
         return self._apply_filters(image, detections)
