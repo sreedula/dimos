@@ -698,9 +698,10 @@ def resolve_grounding(
 
     candidates = ground_candidates_with_yoloe(detector, image, object_phrase)
     if not candidates and _is_attributive(object_phrase):
-        # Open-vocab recall fallback: try the bare head noun, e.g. "mug" for
-        # "red mug", when the full phrase found nothing.
-        candidates = ground_candidates_with_yoloe(detector, image, object_phrase.split()[-1])
+        # Open-vocab recall fallback: try the bare, singularized head noun, e.g.
+        # "mug" for "red mug" / "red mugs", when the full phrase found nothing.
+        head_noun = singularize(object_phrase.split()[-1])
+        candidates = ground_candidates_with_yoloe(detector, image, head_noun)
     if not candidates:
         return None
 

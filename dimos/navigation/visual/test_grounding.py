@@ -601,6 +601,12 @@ def test_resolve_grounding_attribute_recall_fallback_to_head_noun(image: Image) 
     assert resolve_grounding(detector, image, "red mug") == (1.0, 2.0, 3.0, 4.0)
 
 
+def test_resolve_grounding_recall_fallback_singularizes_plural_head_noun(image: Image) -> None:
+    # "red mugs" finds nothing as a phrase; recovery grounds the singular "mug".
+    detector = _FakeDetector({"mug": [_FakeDetection("mug", 0.9, (1, 2, 3, 4))]})
+    assert resolve_grounding(detector, image, "red mugs") == (1.0, 2.0, 3.0, 4.0)
+
+
 def test_resolve_grounding_plain_noun_returns_top_confidence(image: Image) -> None:
     detector = _FakeDetector(
         {
