@@ -51,7 +51,18 @@ The speedup is now a **measured** number, not an estimate. Two honest qualifiers
 
 The trustworthy accuracy signal is **0.98 vs YOLO11**. The low Moondream agreement is itself informative: a small local VLM is a poor grounder — part of why a fast, accurate detector path is worth having. (Multi-instance images like `zidane.jpg` also lower IoU because different models pick different *valid* people, not because anyone is wrong.)
 
+**Aggregate accuracy vs HUMAN ground truth (COCO128)**
+
+The two numbers above are on two images against another *detector*. `eval_grounding.py` broadens this to an aggregate over the first 40 [COCO128](https://docs.ultralytics.com/datasets/detect/coco/) images, scoring YOLOE's grounded boxes against COCO's **human-annotated** labels for `person, car, truck, dog, chair` (CPU, the shipped conf=0.6). 21 images contained an eval class → 29 (image, class) pairs, 97 GT instances.
+
+| Cut | GT instances | median IoU vs human GT | hit-rate @ IoU≥0.5 |
+| --- | --- | --- | --- |
+| **Prominent targets** (GT box ≥ 2% of frame) | 34 | **0.87** | **65%** |
+| All GT instances | 97 | 0.00 | 27% |
+
+On **prominent targets** — the objects a robot actually grounds and drives toward — YOLOE matches the human box at **median IoU 0.87** and localizes 65% of them well (IoU≥0.5), corroborating the 0.98-vs-YOLO11 signal against *real* ground truth over many images. The all-instances row collapses to 0.00 because COCO exhaustively annotates tiny/occluded background instances (63 of the 97) that the conf=0.6 fast-path deliberately does **not** fire on — that is a recall limit of the threshold, not a localization error: median IoU over the boxes YOLOE *does* return is still 0.87. Class-presence recall (a present class returned ≥1 box) is 55% (16/29). All CPU, still images only — an on-robot / simulator grounding run remains a separate manual follow-up.
+
 > **Honesty note — two different baselines, don't conflate them.**
 > - Everything above (YOLOE ~47 ms, Moondream ~41 s, 854×, the IoUs) is **measured on this CPU**.
 > - **854× is vs Moondream-on-CPU**, which is unusually slow. The *production* fallback is the hosted **Qwen2.5-VL-72B**, which is GPU-served and far faster (~2 s) despite being larger. So the production gap (YOLOE vs hosted Qwen) is only **~40×, and that one is an estimate** — there's no `ALIBABA_API_KEY` on the test machine to measure it. Never apply the 854× to Qwen.
-> - Accuracy here is inter-detector agreement, not human ground truth.
+> - The bus.jpg/zidane.jpg IoUs (0.98 vs YOLO11, 0.17 vs Moondream) are inter-detector agreement. The COCO128 table is the one accuracy result here measured against **human ground truth** (median IoU 0.87 on prominent targets); reproduce it with `eval_grounding.py`.
