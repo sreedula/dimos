@@ -567,6 +567,20 @@ def test_resolve_grounding_spatial_qualifier(image: Image) -> None:
     assert resolve_grounding(detector, image, "the leftmost chair") == (0.0, 0.0, 20.0, 20.0)
 
 
+def test_resolve_grounding_spatial_plural_singularizes(image: Image) -> None:
+    # "the leftmost chairs" (plural) must ground the "chair" class and pick the
+    # left box — proving the main path singularizes, not just the fallback.
+    detector = _FakeDetector(
+        {
+            "chair": [
+                _FakeDetection("chair", 0.95, (100, 0, 120, 20)),  # right
+                _FakeDetection("chair", 0.70, (0, 0, 20, 20)),  # left
+            ]
+        }
+    )
+    assert resolve_grounding(detector, image, "the leftmost chairs") == (0.0, 0.0, 20.0, 20.0)
+
+
 def test_resolve_grounding_tracking_prefers_prev_box(image: Image) -> None:
     detector = _FakeDetector(
         {

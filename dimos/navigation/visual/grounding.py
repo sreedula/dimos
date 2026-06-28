@@ -696,6 +696,13 @@ def resolve_grounding(
     """
     object_phrase, qualifier = parse_grounding_query(description)
 
+    # Singularize the head noun so plural queries ("the leftmost chairs") ground
+    # the class YOLOE knows ("chair"); non-plural -s words are left intact.
+    words = object_phrase.split()
+    if words:
+        words[-1] = singularize(words[-1])
+        object_phrase = " ".join(words)
+
     candidates = ground_candidates_with_yoloe(detector, image, object_phrase)
     if not candidates and _is_attributive(object_phrase):
         # Open-vocab recall fallback: try the bare, singularized head noun, e.g.
