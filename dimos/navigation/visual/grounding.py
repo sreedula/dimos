@@ -565,7 +565,10 @@ _SPATIAL_PATTERNS: list[tuple[tuple[str, ...], str]] = [
     (("centermost", "center", "centre", "central", "middle", "in the middle"), "center"),
 ]
 
-# Irregular plurals worth handling for open-vocab grounding.
+# Irregular plurals worth handling for open-vocab grounding. Includes -ves and
+# -oes forms whose singular the regular -s rule gets wrong (it would strip only
+# the "s", yielding non-words like "knive"/"tomatoe" that ground nothing). The
+# -ves -> -f vs -fe split (leaf vs knife) is irregular, so these are explicit.
 _IRREGULAR_PLURALS: dict[str, str] = {
     "people": "person",
     "persons": "person",
@@ -576,6 +579,21 @@ _IRREGULAR_PLURALS: dict[str, str] = {
     "teeth": "tooth",
     "geese": "goose",
     "mice": "mouse",
+    "knives": "knife",
+    "lives": "life",
+    "wives": "wife",
+    "leaves": "leaf",
+    "shelves": "shelf",
+    "wolves": "wolf",
+    "halves": "half",
+    "calves": "calf",
+    "loaves": "loaf",
+    "thieves": "thief",
+    "scarves": "scarf",
+    "tomatoes": "tomato",
+    "potatoes": "potato",
+    "heroes": "hero",
+    "echoes": "echo",
 }
 # Non-plural words ending in "s" that must NOT be naively singularized.
 _KEEP_AS_IS: set[str] = {

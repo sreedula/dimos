@@ -845,11 +845,23 @@ def test_get_object_bboxes_empty_when_nothing_found(image: Image) -> None:
         ("buses", "bus"),
         ("boxes", "box"),
         ("berries", "berry"),
+        # -ves / -oes plurals the generic -s rule would mangle into non-words.
+        ("knives", "knife"),
+        ("leaves", "leaf"),
+        ("shelves", "shelf"),
+        ("wolves", "wolf"),
+        ("lives", "life"),
+        ("tomatoes", "tomato"),
+        ("potatoes", "potato"),
+        # ...but -oe plurals that ARE just +s must stay correct (not "sho"/"to").
+        ("shoes", "shoe"),
+        ("toes", "toe"),
         # Non-plurals / already-singular must be left intact.
         ("bus", "bus"),
         ("gas", "gas"),
         ("lens", "lens"),
         ("glass", "glass"),
+        ("knife", "knife"),
         ("person", "person"),
         ("dog", "dog"),
     ],
