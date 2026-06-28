@@ -15,7 +15,41 @@
 from dimos.models.qwen.bbox import BBox
 from dimos.models.vl.base import VlModel
 from dimos.msgs.sensor_msgs.Image import Image
+from dimos.navigation.visual.grounding import ground_with_yoloe
 from dimos.utils.generic import extract_json_from_llm_response
+
+
+def get_object_bbox(
+    vl_model: VlModel,
+    image: Image,
+    object_description: str,
+    detector=None,
+) -> BBox | None:
+    """Ground ``object_description`` to a bbox, YOLOE fast-path first, VLM fallback.
+
+    When ``detector`` is provided, the open-vocab YOLOE detector is tried first
+    (tens of ms). If it finds the object, that bbox is returned immediately. If
+    it finds nothing — or no detector was given — this falls back to the slower
+    Qwen-VLM path (``get_object_bbox_from_image``), so behavior is unchanged for
+    callers that don't pass a detector.
+
+    Args:
+        vl_model: Vision-language model used for the fallback grounding.
+        image: Image to ground against.
+        object_description: Natural-language name of the object to locate.
+        detector: Optional open-vocab detector for the fast path. If ``None``,
+            only the VLM path is used.
+
+    Returns:
+        The object's ``(x1, y1, x2, y2)`` bbox, or ``None`` if neither path
+        found it.
+    """
+    if detector is not None:
+        bbox = ground_with_yoloe(detector, image, object_description)
+        if bbox is not None:
+            return bbox
+
+    return get_object_bbox_from_image(vl_model, image, object_description)
 
 
 def get_object_bbox_from_image(

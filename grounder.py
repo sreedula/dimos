@@ -1,52 +1,17 @@
-"""YOLOE grounding fast-path for DimOS.
+"""YOLOE grounding fast-path demo + latency self-test for DimOS.
 
-`ground_with_yoloe` turns a natural-language object description into a single
-bounding box using the open-vocabulary YOLOE detector. It is the fast
-counterpart to the slow Qwen-VLM grounding in
-`dimos/navigation/visual/query.py::get_object_bbox_from_image`, and returns the
-same `(x1, y1, x2, y2)` float-tuple convention so it can drop in with minimal
-changes.
-
-The function takes an already-constructed detector and image — it does NOT build
-them itself. It memoizes the last text prompt per detector: re-encoding the
-prompt (a CLIP text-encoder pass) dominates per-call latency, so when the
-description is unchanged from the detector's previous call — the common
-navigation case of grounding the same object across consecutive video frames —
-that cost is skipped and only the detection runs.
+The grounder itself now lives in the package at
+``dimos.navigation.visual.grounding.ground_with_yoloe`` (single source of truth,
+also used by ``dimos.navigation.visual.query.get_object_bbox``). This script
+re-exports it and exercises it headless against the ultralytics ``bus.jpg``
+sample to report steady-state latency.
 """
 
 from __future__ import annotations
 
+from dimos.navigation.visual.grounding import ground_with_yoloe
 
-def ground_with_yoloe(detector, image, description: str) -> tuple[float, float, float, float] | None:
-    """Return the (x1,y1,x2,y2) bbox of the best YOLOE match for `description`, or None.
-
-    Args:
-        detector: A constructed open-vocab detector (e.g. ``Yoloe2DDetector`` in
-            ``YoloePromptMode.PROMPT``) exposing ``set_prompts`` and
-            ``process_image``.
-        image: A ``dimos.msgs.sensor_msgs.Image`` to ground against.
-        description: Natural-language name of the object to locate.
-
-    Returns:
-        The bounding box of the single highest-confidence detection as a
-        ``(x1, y1, x2, y2)`` tuple of floats, or ``None`` if nothing matched.
-    """
-    # Skip the costly text re-encode when the target hasn't changed since this
-    # detector's last call (the steady-state per-frame tracking path).
-    if getattr(detector, "_yoloe_grounder_prompt", None) != description:
-        detector.set_prompts(text=[description])
-        detector._yoloe_grounder_prompt = description
-
-    result = detector.process_image(image)
-
-    detections = result.detections
-    if not detections:
-        return None
-
-    best = max(detections, key=lambda d: d.confidence)
-    x1, y1, x2, y2 = best.bbox
-    return (float(x1), float(y1), float(x2), float(y2))
+__all__ = ["ground_with_yoloe"]
 
 
 if __name__ == "__main__":
