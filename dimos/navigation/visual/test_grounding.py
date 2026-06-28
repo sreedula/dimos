@@ -921,3 +921,35 @@ def test_yoloe_grounds_grayscale_frame() -> None:
     assert detector is not None
     assert len(ground_candidates_with_yoloe(detector, gray, "person")) > 0
     detector.stop()
+
+
+class _ConfFakeDetector:
+    """Fake whose process_image only 'sees' the object below a confidence floor."""
+
+    def __init__(self, present_below: float) -> None:
+        self.confidence = 0.6
+        self._prompt: str | None = None
+        self.present_below = present_below
+
+    def set_prompts(self, text: list[str] | None = None, bboxes=None) -> None:
+        self._prompt = text[0] if text else None
+
+    def process_image(self, image: Image) -> _FakeResult:
+        if self.confidence <= self.present_below:
+            return _FakeResult([_FakeDetection(self._prompt or "", 0.3, (1, 2, 3, 4))])
+        return _FakeResult([])
+
+
+def test_resolve_grounding_retries_at_lower_confidence(image: Image) -> None:
+    # Object only detectable at conf <= 0.3; default 0.6 finds nothing, so the
+    # recall retry should fire and find it.
+    detector = _ConfFakeDetector(present_below=0.3)
+    assert resolve_grounding(detector, image, "bottle") == (1.0, 2.0, 3.0, 4.0)
+    assert detector.confidence == 0.6  # restored after the retry
+
+
+def test_resolve_grounding_no_retry_when_found_at_default(image: Image) -> None:
+    # Found at the default confidence -> no retry, confidence untouched.
+    detector = _ConfFakeDetector(present_below=0.6)
+    assert resolve_grounding(detector, image, "bottle") == (1.0, 2.0, 3.0, 4.0)
+    assert detector.confidence == 0.6

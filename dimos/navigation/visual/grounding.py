@@ -683,6 +683,27 @@ def _is_attributive(object_phrase: str) -> bool:
     return len(object_phrase.split()) > 1
 
 
+# Lower bound for the recall retry: still a real detection, not noise.
+_RECALL_RETRY_CONFIDENCE = 0.25
+
+
+def _retry_at_lower_confidence(detector, image, description: str) -> list[BBox]:
+    """Re-ground `description` once at a lower confidence; ``[]`` if not worthwhile.
+
+    The detector exposes a ``confidence`` attribute that ``process_image`` reads.
+    Temporarily lower it, ground again, and always restore it. Returns ``[]`` when
+    the detector has no such knob or is already at/below the retry floor.
+    """
+    original = getattr(detector, "confidence", None)
+    if original is None or original <= _RECALL_RETRY_CONFIDENCE:
+        return []
+    try:
+        detector.confidence = _RECALL_RETRY_CONFIDENCE
+        return ground_candidates_with_yoloe(detector, image, description)
+    finally:
+        detector.confidence = original
+
+
 def resolve_grounding(
     detector, image, description: str, *, prev_box: BBox | None = None
 ) -> BBox | None:
@@ -728,6 +749,11 @@ def resolve_grounding(
         # "mug" for "red mug" / "red mugs", when the full phrase found nothing.
         head_noun = singularize(object_phrase.split()[-1])
         candidates = ground_candidates_with_yoloe(detector, image, head_noun)
+    if not candidates:
+        # Last cheap try before the caller falls to the slow VLM: re-run YOLOE at
+        # a lower confidence to catch a faint/small object it skipped. Only fires
+        # on a miss, so the precision-oriented default is unchanged for hits.
+        candidates = _retry_at_lower_confidence(detector, image, object_phrase)
     if not candidates:
         return None
 
