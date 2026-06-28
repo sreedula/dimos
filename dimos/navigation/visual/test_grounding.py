@@ -1362,3 +1362,41 @@ def test_resolve_grounding_attribute_after_preposition(image: Image) -> None:
     # ground "person" (before the preposition), NOT "red" (which would be None).
     detector = _FakeDetector({"person": [_FakeDetection("person", 0.9, (1, 2, 3, 4))]})
     assert resolve_grounding(detector, image, "the person in red") == (1.0, 2.0, 3.0, 4.0)
+
+
+def test_select_by_attribute_and_position_composes_clip_then_geometry() -> None:
+    boxes = [(0, 0, 10, 10), (50, 0, 60, 10), (100, 0, 110, 10)]  # x-centers 5/55/105
+    # CLIP says the middle & right boxes match the attribute (above mean), so the
+    # leftmost of THOSE is the middle box, not the overall-leftmost.
+    chosen = grounding_mod.select_by_attribute_and_position(
+        None, boxes, "person in red", "leftmost", scorer=lambda i, c, p: [0.1, 0.9, 0.8]
+    )
+    assert chosen == (50, 0, 60, 10)
+
+
+def test_select_by_attribute_and_position_falls_back_to_geometry_without_clip() -> None:
+    boxes = [(0, 0, 10, 10), (50, 0, 60, 10)]
+
+    def boom(image, candidates, phrase):
+        raise RuntimeError("CLIP unavailable")
+
+    # No CLIP -> plain geometry (leftmost overall), never worse than before.
+    chosen = grounding_mod.select_by_attribute_and_position(
+        None, boxes, "person in red", "leftmost", scorer=boom
+    )
+    assert chosen == (0, 0, 10, 10)
+
+
+@pytest.mark.parametrize(
+    "phrase,expected",
+    [
+        ("person in red", True),
+        ("man wearing a hat", True),
+        ("woman holding a cup", True),
+        ("wine glass", False),  # two-word class, not an attribute
+        ("red mug", False),  # attribute-first, no preposition
+        ("stop sign", False),
+    ],
+)
+def test_has_attribute_preposition(phrase: str, expected: bool) -> None:
+    assert grounding_mod._has_attribute_preposition(phrase) == expected

@@ -402,6 +402,45 @@ def select_by_clip(
     return candidates[best]
 
 
+def select_by_attribute_and_position(
+    image,
+    candidates: list[BBox],
+    phrase: str,
+    qualifier: str,
+    *,
+    scorer: Callable[[Any, list[BBox], str], list[float]] | None = None,
+) -> BBox | None:
+    """Compose appearance and geometry for "the leftmost person in red".
+
+    Keeps the candidates whose crop matches `phrase` by CLIP (those at or above
+    the mean score — the attribute matches), then applies the spatial `qualifier`
+    among them. Degrades to plain :func:`select_by_position` if CLIP is
+    unavailable or the scores are unusable, so it never does worse than geometry
+    alone.
+
+    Args:
+        image: The image the boxes were grounded in.
+        candidates: ``(x1, y1, x2, y2)`` boxes to choose among.
+        phrase: The attributive phrase to match crops against, e.g. "person in red".
+        qualifier: The spatial selector for :func:`select_by_position`.
+        scorer: Injectable ``(image, candidates, phrase) -> scores``; defaults to
+            :func:`clip_scores`.
+    """
+    if not candidates:
+        return None
+    score = scorer if scorer is not None else clip_scores
+    try:
+        scores = score(image, candidates, phrase)
+    except Exception:
+        logger.warning("CLIP unavailable; using geometry alone.", exc_info=True)
+        return select_by_position(candidates, qualifier)
+    if not scores or len(scores) != len(candidates):
+        return select_by_position(candidates, qualifier)
+    mean = sum(scores) / len(scores)
+    kept = [c for c, s in zip(candidates, scores, strict=True) if s >= mean]
+    return select_by_position(kept or candidates, qualifier)
+
+
 def box_iou(a: BBox, b: BBox) -> float:
     """Intersection-over-union of two ``(x1, y1, x2, y2)`` boxes, in ``0..1``.
 
@@ -789,6 +828,17 @@ def _object_class(phrase: str) -> str:
     return singularize(before[-1]) if before else singularize(phrase.split()[-1])
 
 
+def _has_attribute_preposition(phrase: str) -> bool:
+    """True if `phrase` carries a prepositional attribute ("person in red").
+
+    Distinguishes a genuine attribute from a two-word class name ("wine glass",
+    "stop sign"): only the former has an attribute preposition, so only the former
+    is safe to narrow by appearance before applying a spatial qualifier.
+    """
+    lowered = phrase.lower()
+    return any(prep in lowered for prep in _ATTRIBUTE_PREPS)
+
+
 def _singularize_head(phrase: str) -> str:
     """Singularize the last word of a phrase ("red chairs" -> "red chair")."""
     words = phrase.split()
@@ -1030,6 +1080,11 @@ def resolve_grounding(
     if prev_box is not None:
         return select_nearest(candidates, prev_box)
     if qualifier is not None:
+        # "the leftmost person in red": narrow to the attribute matches first,
+        # then apply the spatial qualifier — but only for a genuine prepositional
+        # attribute, so two-word class names ("wine glass") aren't CLIP-narrowed.
+        if len(candidates) > 1 and _has_attribute_preposition(object_phrase):
+            return select_by_attribute_and_position(image, candidates, object_phrase, qualifier)
         return select_by_position(candidates, qualifier)
     if len(candidates) > 1 and _is_attributive(object_phrase):
         try:
