@@ -650,10 +650,11 @@ def test_build_yoloe_grounding_detector_forwards_confidence(monkeypatch) -> None
         return object()
 
     monkeypatch.setattr(yoloe_mod, "Yoloe2DDetector", _capture)
-    det = build_yoloe_grounding_detector(confidence=0.25)
+    det = build_yoloe_grounding_detector(confidence=0.25, iou_threshold=0.8)
 
     assert det is not None
     assert captured["confidence"] == 0.25  # recall knob threaded through
+    assert captured["iou_threshold"] == 0.8  # NMS knob threaded through
     assert captured["max_area_ratio"] is None
 
 

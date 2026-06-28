@@ -47,6 +47,7 @@ class Yoloe2DDetector(Detector):
         exclude_class_ids: list[int] | None = None,
         max_area_ratio: float | None = 0.3,
         confidence: float = 0.6,
+        iou_threshold: float = 0.6,
     ) -> None:
         """
         Initialize YOLO-E 2D detector.
@@ -60,6 +61,8 @@ class Yoloe2DDetector(Detector):
             max_area_ratio: Maximum bbox area ratio (0-1) relative to image.
             confidence: Minimum detection confidence (0-1]. Lower values raise
                 recall (find smaller/occluded objects) at the cost of precision.
+            iou_threshold: NMS IoU threshold (0-1]. Higher values keep more
+                overlapping boxes (useful for crowded scenes / touching objects).
         """
         if model_name is None:
             if prompt_mode == YoloePromptMode.LRPC:
@@ -72,6 +75,7 @@ class Yoloe2DDetector(Detector):
         self._visual_prompts: dict[str, NDArray[Any]] | None = None
         self.max_area_ratio = max_area_ratio
         self.confidence = confidence
+        self.iou_threshold = iou_threshold
         self._lock = threading.Lock()
 
         if prompt_mode == YoloePromptMode.PROMPT:
@@ -83,6 +87,9 @@ class Yoloe2DDetector(Detector):
 
         if not (0.0 < self.confidence <= 1.0):
             raise ValueError("confidence must be in the range (0, 1].")
+
+        if not (0.0 < self.iou_threshold <= 1.0):
+            raise ValueError("iou_threshold must be in the range (0, 1].")
 
         if device:
             self.device = device
@@ -136,7 +143,7 @@ class Yoloe2DDetector(Detector):
             "source": image.to_opencv(),
             "device": self.device,
             "conf": self.confidence,
-            "iou": 0.6,
+            "iou": self.iou_threshold,
             "persist": True,
             "verbose": False,
         }

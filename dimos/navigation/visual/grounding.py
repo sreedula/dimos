@@ -52,7 +52,9 @@ _clip_preprocess: Callable[..., Any] | None = None
 _clip_text_cache: dict[str, Any] = {}
 
 
-def build_yoloe_grounding_detector(confidence: float = 0.6) -> Any | None:
+def build_yoloe_grounding_detector(
+    confidence: float = 0.6, iou_threshold: float = 0.6
+) -> Any | None:
     """Best-effort construct the YOLOE fast-path detector; ``None`` on any failure.
 
     Grounding consumers use this to opt into the fast path without risking a
@@ -65,6 +67,8 @@ def build_yoloe_grounding_detector(confidence: float = 0.6) -> Any | None:
         confidence: Minimum detection confidence (0-1]. The default 0.6 favors
             precision; lower it (e.g. 0.25) to raise recall on smaller or
             partially-occluded targets.
+        iou_threshold: NMS IoU threshold (0-1]; raise it to keep more overlapping
+            boxes in crowded scenes.
     """
     try:
         from dimos.perception.detection.detectors.yoloe import (
@@ -76,6 +80,7 @@ def build_yoloe_grounding_detector(confidence: float = 0.6) -> Any | None:
             prompt_mode=YoloePromptMode.PROMPT,
             max_area_ratio=None,
             confidence=confidence,
+            iou_threshold=iou_threshold,
         )
     except Exception:
         logger.warning(
