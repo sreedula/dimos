@@ -247,7 +247,11 @@ class NavigationSkillContainer(Module):
         if self._latest_image is None:
             return None
 
-        # Track continuity: only reuse the prior box when the query is unchanged.
+        # Continuity ACROSS repeated navigation commands for the same query
+        # (this grounds once per navigate_with_text; per-frame tracking is the
+        # ObjectTracking module's job). Reusing the prior box as a hint re-locks
+        # the same instance when "go to the person" is issued again. Reset on a
+        # new query.
         if query != self._last_grounding_query:
             self._last_grounding_query = query
             self._last_grounding_bbox = None
@@ -258,8 +262,8 @@ class NavigationSkillContainer(Module):
             detector=self._get_grounding_detector(),
             prev_box=self._last_grounding_bbox,
         )
-        # Keep the last known box through a transient miss so the next frame can
-        # re-lock onto the same instance instead of re-acquiring from scratch.
+        # Keep the last box even when this command missed, so a later same-query
+        # navigation can still re-lock instead of re-acquiring from scratch.
         if bbox is not None:
             self._last_grounding_bbox = bbox
         return bbox

@@ -45,24 +45,24 @@ def test_navigation_tracking_continuity(monkeypatch) -> None:
 
     monkeypatch.setattr(nav, "get_object_bbox", fake_get_object_bbox)
 
-    # Frame 1: no prior box.
+    # Command 1: no prior box.
     assert skill._get_bbox_for_current_frame("person") == (1.0, 2.0, 3.0, 4.0)
     assert prev_boxes_seen[-1] is None
 
-    # Frame 2: the prior box is fed back as the tracking hint.
+    # Command 2 (same query): the prior box is fed back as the hint.
     skill._get_bbox_for_current_frame("person")
     assert prev_boxes_seen[-1] == (1.0, 2.0, 3.0, 4.0)
 
-    # Frame 3: a transient miss returns None but must NOT drop the last box.
+    # Command 3: a miss returns None but must NOT drop the last box.
     ret["box"] = None
     assert skill._get_bbox_for_current_frame("person") is None
 
-    # Frame 4: still tracking with the last KNOWN box (survived the miss).
+    # Command 4: still hinted by the last KNOWN box (survived the miss).
     ret["box"] = (5.0, 6.0, 7.0, 8.0)
     skill._get_bbox_for_current_frame("person")
     assert prev_boxes_seen[-1] == (1.0, 2.0, 3.0, 4.0)
 
-    # A different query clears the tracking memory.
+    # A different query clears the continuity memory.
     skill._get_bbox_for_current_frame("chair")
     assert prev_boxes_seen[-1] is None
 
