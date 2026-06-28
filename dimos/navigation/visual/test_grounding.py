@@ -38,6 +38,7 @@ from dimos.navigation.visual.grounding import (
     select_by_clip,
     select_by_position,
     select_nearest,
+    singularize,
 )
 from dimos.navigation.visual.query import (
     get_object_bbox,
@@ -719,7 +720,7 @@ class _TripwireVlModel:
 def test_get_object_bboxes_returns_all_candidates_without_vlm(image: Image) -> None:
     detector = _FakeDetector(
         {
-            "chairs": [  # "all the chairs" -> grounds the bare class "chairs"
+            "chair": [  # "all the chairs" -> singularized to the class "chair"
                 _FakeDetection("chair", 0.9, (0, 0, 10, 10)),
                 _FakeDetection("chair", 0.8, (20, 0, 30, 10)),
                 _FakeDetection("chair", 0.7, (40, 0, 50, 10)),
@@ -740,6 +741,39 @@ def test_get_object_bboxes_falls_back_to_single_vlm_box(image: Image) -> None:
 def test_get_object_bboxes_empty_when_nothing_found(image: Image) -> None:
     vl = _StubVlModel("no json here")  # extract_json -> None
     assert get_object_bboxes(vl, image, "chair") == []
+
+
+@pytest.mark.parametrize(
+    "plural,singular",
+    [
+        ("people", "person"),
+        ("persons", "person"),
+        ("children", "child"),
+        ("men", "man"),
+        ("chairs", "chair"),
+        ("cars", "car"),
+        ("buses", "bus"),
+        ("boxes", "box"),
+        ("berries", "berry"),
+        # Non-plurals / already-singular must be left intact.
+        ("bus", "bus"),
+        ("gas", "gas"),
+        ("lens", "lens"),
+        ("glass", "glass"),
+        ("person", "person"),
+        ("dog", "dog"),
+    ],
+)
+def test_singularize(plural: str, singular: str) -> None:
+    assert singularize(plural) == singular
+
+
+def test_get_object_bboxes_singularizes_plural_query(image: Image) -> None:
+    # "all the people" must ground the class "person", not the literal "people".
+    detector = _FakeDetector({"person": [_FakeDetection("person", 0.9, (1, 2, 3, 4))]})
+    assert get_object_bboxes(_RaisingVlModel(), image, "all the people", detector=detector) == [
+        (1.0, 2.0, 3.0, 4.0)
+    ]
 
 
 @pytest.mark.self_hosted

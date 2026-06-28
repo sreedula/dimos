@@ -546,6 +546,58 @@ _SPATIAL_PATTERNS: list[tuple[tuple[str, ...], str]] = [
     (("centermost", "center", "centre", "central", "middle", "in the middle"), "center"),
 ]
 
+# Irregular plurals worth handling for open-vocab grounding.
+_IRREGULAR_PLURALS: dict[str, str] = {
+    "people": "person",
+    "persons": "person",
+    "men": "man",
+    "women": "woman",
+    "children": "child",
+    "feet": "foot",
+    "teeth": "tooth",
+    "geese": "goose",
+    "mice": "mouse",
+}
+# Non-plural words ending in "s" that must NOT be naively singularized.
+_KEEP_AS_IS: set[str] = {
+    "lens",
+    "iris",
+    "octopus",
+    "scissors",
+    "glasses",
+    "pants",
+    "series",
+    "species",
+    "news",
+    "compass",
+    "grass",
+    "glass",
+}
+
+
+def singularize(word: str) -> str:
+    """Best-effort singular of a noun for open-vocab grounding ("chairs" -> "chair").
+
+    Handles common irregular plurals and regular ``-ies``/``-es``/``-s`` endings,
+    and leaves known non-plural ``-s`` words ("bus", "lens") alone. Imperfect by
+    design: a wrong guess simply grounds nothing and falls back, so it only ever
+    helps recall — it never makes a correct query worse.
+    """
+    lower = word.lower()
+    if lower in _KEEP_AS_IS:
+        return word
+    if lower in _IRREGULAR_PLURALS:
+        return _IRREGULAR_PLURALS[lower]
+    if len(lower) > 3 and lower.endswith("ies"):
+        return word[:-3] + "y"
+    if len(lower) > 4 and lower.endswith(("ses", "xes", "zes", "ches", "shes")):
+        return word[:-2]
+    # >3 guard keeps short non-plurals like "bus"/"gas" intact.
+    if len(lower) > 3 and lower.endswith("s") and not lower.endswith("ss"):
+        return word[:-1]
+    return word
+
+
 # Ordinal words → 1-based rank ("last" handled specially by select_by_position).
 _ORDINALS: dict[str, str] = {
     "first": "1",

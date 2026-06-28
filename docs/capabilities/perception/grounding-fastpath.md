@@ -44,7 +44,7 @@ prev = get_object_bbox(vl_model, next_image, "person", detector=detector, prev_b
 boxes = get_object_bboxes(vl_model, image, "person", detector=detector)  # e.g. 5 boxes
 ```
 
-`get_object_bboxes` returns *all* matching boxes (highest-confidence first) for an in-vocabulary class; for a query YOLOE can't ground it falls back to the VLM's single box. (On `bus.jpg`, `"person"` → 5 boxes with no VLM call.)
+`get_object_bboxes` returns *all* matching boxes (highest-confidence first) for an in-vocabulary class; for a query YOLOE can't ground it falls back to the VLM's single box. It strips quantifiers ("all the", "every") and **singularizes** the class, so natural plurals work — `"all the people"` grounds the `person` class (on `bus.jpg`, → 5 boxes, no VLM call).
 
 - **Spatial** — `leftmost / rightmost / topmost / bottommost / largest (biggest, nearest) / smallest / center`, plus **ordinals** like "the second chair from the left" or "the last person from the right", all resolved geometrically.
 - **Appearance** — a multi-word phrase ("red mug") re-ranks same-class candidates by CLIP similarity; degrades to the top box if CLIP is unavailable.

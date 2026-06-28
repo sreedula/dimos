@@ -21,6 +21,7 @@ from dimos.navigation.visual.grounding import (
     ground_candidates_with_yoloe,
     parse_grounding_query,
     resolve_grounding,
+    singularize,
 )
 from dimos.utils.generic import extract_json_from_llm_response
 from dimos.utils.logging_config import setup_logger
@@ -113,6 +114,12 @@ def get_object_bboxes(
                 object_phrase,
                 flags=re.IGNORECASE,
             ).strip()
+            # Singularize the head noun so "people"/"chairs" ground as the class
+            # YOLOE knows ("person"/"chair").
+            words = object_phrase.split()
+            if words:
+                words[-1] = singularize(words[-1])
+                object_phrase = " ".join(words)
             boxes = ground_candidates_with_yoloe(
                 detector, image, object_phrase or object_description
             )
