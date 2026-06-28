@@ -1298,3 +1298,44 @@ def test_parse_grounding_query_ordinals_beyond_six(query: str, expected: tuple) 
     # Ordinals past 6 (words to ten) and any digit ordinal ("7th", "21st") parse,
     # rather than mis-firing the bare-direction path on a garbage object phrase.
     assert parse_grounding_query(query) == expected
+
+
+def test_resolve_grounding_integration_realistic_queries(image: Image) -> None:
+    """End-to-end routing: parse + resolve + select together over a fake scene.
+
+    Locks in that the natural-language fixes (spatial, ordinal, relational,
+    plural, punctuation, preamble) integrate correctly through resolve_grounding,
+    not just in isolation. Chairs span left->right at x-centers 5/55/105.
+    """
+    detector = _FakeDetector(
+        {
+            "chair": [
+                _FakeDetection("chair", 0.9, (0, 0, 10, 10)),
+                _FakeDetection("chair", 0.8, (50, 0, 60, 10)),
+                _FakeDetection("chair", 0.7, (100, 0, 110, 10)),
+            ],
+            "person": [
+                _FakeDetection("person", 0.9, (0, 50, 10, 60)),
+                _FakeDetection("person", 0.85, (50, 50, 60, 60)),
+                _FakeDetection("person", 0.8, (100, 50, 110, 60)),
+            ],
+            "cup": [_FakeDetection("cup", 0.9, (50, 0, 60, 10))],  # center x=55
+        }
+    )
+    left, mid, right = (0.0, 0.0, 10.0, 10.0), (50.0, 0.0, 60.0, 10.0), (100.0, 0.0, 110.0, 10.0)
+    expected = {
+        "the leftmost chair": left,
+        "the rightmost chair": right,
+        "the person in the middle": (50.0, 50.0, 60.0, 60.0),
+        "find the cup": (50.0, 0.0, 60.0, 10.0),
+        "the 2nd chair from the left": mid,
+        "the last chair from the left": right,
+        "the chair.": left,  # trailing punctuation stripped
+        "could you find the chair": left,  # preamble stripped
+        "the chairs": left,  # plural singularized
+        "the chair to the left of the cup": left,  # directional relation
+        "the chair to the right of the cup": right,
+        "the bottle": None,  # absent class -> None (caller falls to the VLM)
+    }
+    for query, want in expected.items():
+        assert resolve_grounding(detector, image, query) == want, query
