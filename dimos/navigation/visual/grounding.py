@@ -30,6 +30,7 @@ cost is skipped and only the detection runs.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 import numpy as np
@@ -494,3 +495,105 @@ def ground_with_attribute(
     if phrase is None:
         return candidates[0] if candidates else None
     return select_by_clip(image, candidates, phrase)
+
+
+# Spatial language → canonical qualifier understood by ``select_by_position``.
+# Multi-word phrases are listed before their single-word forms so they match
+# first (e.g. "on the left" before bare "left").
+_SPATIAL_PATTERNS: list[tuple[tuple[str, ...], str]] = [
+    (("leftmost", "left-most", "on the left", "to the left", "left"), "leftmost"),
+    (("rightmost", "right-most", "on the right", "to the right", "right"), "rightmost"),
+    (("topmost", "top-most", "at the top", "top", "upper"), "topmost"),
+    (("bottommost", "bottom-most", "at the bottom", "bottom", "lower"), "bottommost"),
+    (("largest", "biggest", "nearest", "closest"), "largest"),
+    (("smallest", "farthest", "furthest"), "smallest"),
+    (("centermost", "center", "centre", "central", "middle", "in the middle"), "center"),
+]
+
+
+def parse_grounding_query(description: str) -> tuple[str, str | None]:
+    """Split a query into (object phrase, spatial qualifier or None).
+
+    Recognizes spatial language like "the leftmost chair" or "person on the
+    right" and returns the canonical qualifier for :func:`select_by_position`
+    plus the remaining object phrase with the spatial words and any leading
+    article removed. With no spatial language, returns ``(cleaned text, None)``.
+
+    Args:
+        description: The natural-language grounding query.
+
+    Returns:
+        ``(object_phrase, qualifier)`` where ``qualifier`` is one of the
+        selectors understood by :func:`select_by_position`, or ``None``.
+    """
+    text = " ".join(description.strip().split())
+    for phrases, qualifier in _SPATIAL_PATTERNS:
+        for phrase in phrases:
+            pattern = re.compile(rf"\b{re.escape(phrase)}\b", re.IGNORECASE)
+            if pattern.search(text):
+                stripped = pattern.sub(" ", text)
+                stripped = re.sub(r"^\s*(the|a|an)\s+", " ", stripped, flags=re.IGNORECASE)
+                stripped = " ".join(stripped.split()).strip(" ,.")
+                return (stripped or text), qualifier
+    return text, None
+
+
+def _is_attributive(object_phrase: str) -> bool:
+    """Heuristic: a multi-word phrase likely carries an appearance attribute."""
+    return len(object_phrase.split()) > 1
+
+
+def resolve_grounding(
+    detector, image, description: str, *, prev_box: BBox | None = None
+) -> BBox | None:
+    """Ground `description`, disambiguating via the best available strategy.
+
+    This is the unified entry point that composes the grounding primitives so a
+    single natural-language query gets the right treatment:
+
+    1. **Tracking** — if ``prev_box`` is given, return the candidate most
+       consistent with it (:func:`select_nearest`), keeping a tracked target
+       locked across frames.
+    2. **Spatial** — if the query names a position ("the leftmost chair"),
+       resolve it geometrically (:func:`select_by_position`).
+    3. **Appearance** — for a multi-word phrase ("the red mug"), re-rank the
+       candidates by CLIP similarity to the phrase (:func:`select_by_clip`),
+       degrading to the top-confidence box if CLIP is unavailable.
+    4. **Plain** — otherwise return the highest-confidence box.
+
+    For an attributive phrase that the detector can't find directly, it retries
+    with the head noun (last word) to improve open-vocab recall.
+
+    Args:
+        detector: A constructed open-vocab detector.
+        image: A ``dimos.msgs.sensor_msgs.Image`` to ground against.
+        description: The natural-language grounding query.
+        prev_box: The target's previous-frame box, for tracking continuity.
+
+    Returns:
+        The chosen ``(x1, y1, x2, y2)`` bbox, or ``None`` if nothing matched.
+    """
+    object_phrase, qualifier = parse_grounding_query(description)
+
+    candidates = ground_candidates_with_yoloe(detector, image, object_phrase)
+    if not candidates and _is_attributive(object_phrase):
+        # Open-vocab recall fallback: try the bare head noun, e.g. "mug" for
+        # "red mug", when the full phrase found nothing.
+        candidates = ground_candidates_with_yoloe(detector, image, object_phrase.split()[-1])
+    if not candidates:
+        return None
+
+    if prev_box is not None:
+        return select_nearest(candidates, prev_box)
+    if qualifier is not None:
+        return select_by_position(candidates, qualifier)
+    if len(candidates) > 1 and _is_attributive(object_phrase):
+        try:
+            return select_by_clip(image, candidates, description)
+        except Exception:
+            logger.warning(
+                "CLIP attribute re-ranking unavailable; using top-confidence match.",
+                exc_info=True,
+            )
+            return candidates[0]
+    return candidates[0]

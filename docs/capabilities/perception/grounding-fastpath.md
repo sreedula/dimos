@@ -26,7 +26,28 @@ bbox = get_object_bbox(vl_model, image, "person", detector=detector)
 # -> (x1, y1, x2, y2) or None
 ```
 
-The underlying grounder is `dimos.navigation.visual.grounding.ground_with_yoloe`. It memoizes the prompt per detector, so grounding the same object across consecutive frames skips the text re-encode and pays only the detection cost.
+### Natural-language queries
+
+`get_object_bbox` parses the description and disambiguates with the right strategy — all on the fast path, no VLM call:
+
+```python
+get_object_bbox(vl_model, image, "the leftmost person", detector=detector)  # spatial
+get_object_bbox(vl_model, image, "the biggest chair",   detector=detector)  # largest/nearest
+get_object_bbox(vl_model, image, "the red mug",         detector=detector)  # appearance (CLIP re-rank)
+
+# Tracking: feed the previous frame's box so the same instance stays locked,
+# instead of jumping to a higher-confidence different instance.
+prev = get_object_bbox(vl_model, image, "person", detector=detector)
+prev = get_object_bbox(vl_model, next_image, "person", detector=detector, prev_box=prev)
+```
+
+- **Spatial** — `leftmost / rightmost / topmost / bottommost / largest (biggest, nearest) / smallest / center`, resolved geometrically.
+- **Appearance** — a multi-word phrase ("red mug") re-ranks same-class candidates by CLIP similarity; degrades to the top box if CLIP is unavailable.
+- **Tracking** — `prev_box` selects the candidate most consistent with the last box (highest IoU, else nearest center).
+
+The `navigation` skill feeds its last goal box back as `prev_box` automatically, so re-grounding the same goal across frames stays locked on one instance.
+
+The underlying primitives live in `dimos.navigation.visual.grounding` (`resolve_grounding`, `ground_candidates_with_yoloe`, `select_by_position`, `select_by_clip`, `select_nearest`). The detector memoizes the prompt, so grounding the same object across consecutive frames skips the text re-encode and pays only the detection cost.
 
 ## Benchmark
 

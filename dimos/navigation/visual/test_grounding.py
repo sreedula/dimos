@@ -24,6 +24,7 @@ import numpy as np
 import pytest
 
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
+from dimos.navigation.visual import grounding as grounding_mod
 from dimos.navigation.visual.grounding import (
     box_iou,
     build_yoloe_grounding_detector,
@@ -32,6 +33,8 @@ from dimos.navigation.visual.grounding import (
     ground_with_position,
     ground_with_tracking,
     ground_with_yoloe,
+    parse_grounding_query,
+    resolve_grounding,
     select_by_clip,
     select_by_position,
     select_nearest,
@@ -503,3 +506,109 @@ def test_clip_reranks_real_bus_crops() -> None:
     assert len(scores) == 2
     assert scores[0] > scores[1]  # the bus half matches "a red bus" better
     assert select_by_clip(img, candidates, "a red bus") == left
+
+
+# --- Phase 6: natural-language parsing + unified resolver wiring ---
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("the leftmost chair", ("chair", "leftmost")),
+        ("person on the right", ("person", "rightmost")),
+        ("the biggest dog", ("dog", "largest")),
+        ("central person", ("person", "center")),
+        ("red mug", ("red mug", None)),
+        ("person", ("person", None)),
+    ],
+)
+def test_parse_grounding_query(query: str, expected: tuple) -> None:
+    assert parse_grounding_query(query) == expected
+
+
+def test_resolve_grounding_spatial_qualifier(image: Image) -> None:
+    # Two chairs; the higher-confidence one is on the RIGHT, but "leftmost chair"
+    # must return the left one — proving spatial parsing overrides raw confidence.
+    detector = _FakeDetector(
+        {
+            "chair": [
+                _FakeDetection("chair", 0.95, (100, 0, 120, 20)),  # right, top conf
+                _FakeDetection("chair", 0.70, (0, 0, 20, 20)),  # left
+            ]
+        }
+    )
+    assert resolve_grounding(detector, image, "the leftmost chair") == (0.0, 0.0, 20.0, 20.0)
+
+
+def test_resolve_grounding_tracking_prefers_prev_box(image: Image) -> None:
+    detector = _FakeDetector(
+        {
+            "person": [
+                _FakeDetection("person", 0.95, (200, 200, 240, 260)),  # different instance
+                _FakeDetection("person", 0.70, (10, 10, 30, 40)),  # near prev_box
+            ]
+        }
+    )
+    prev = (11.0, 11.0, 31.0, 41.0)
+    # Tracking continuity beats raw confidence.
+    assert resolve_grounding(detector, image, "person", prev_box=prev) == (10.0, 10.0, 30.0, 40.0)
+
+
+def test_resolve_grounding_attribute_uses_clip(image: Image, monkeypatch) -> None:
+    detector = _FakeDetector(
+        {
+            "red mug": [
+                _FakeDetection("mug", 0.9, (0, 0, 10, 10)),
+                _FakeDetection("mug", 0.8, (50, 50, 60, 60)),
+            ]
+        }
+    )
+    # Force CLIP to prefer the SECOND candidate regardless of confidence.
+    monkeypatch.setattr(grounding_mod, "clip_scores", lambda img, cands, phrase: [0.1, 0.9])
+    assert resolve_grounding(detector, image, "red mug") == (50.0, 50.0, 60.0, 60.0)
+
+
+def test_resolve_grounding_attribute_recall_fallback_to_head_noun(image: Image) -> None:
+    # Detector finds nothing for the full phrase but finds the head noun "mug".
+    detector = _FakeDetector({"mug": [_FakeDetection("mug", 0.9, (1, 2, 3, 4))]})
+    assert resolve_grounding(detector, image, "red mug") == (1.0, 2.0, 3.0, 4.0)
+
+
+def test_resolve_grounding_plain_noun_returns_top_confidence(image: Image) -> None:
+    detector = _FakeDetector(
+        {
+            "person": [
+                _FakeDetection("person", 0.95, (5, 6, 7, 8)),
+                _FakeDetection("person", 0.60, (0, 0, 1, 1)),
+            ]
+        }
+    )
+    assert resolve_grounding(detector, image, "person") == (5.0, 6.0, 7.0, 8.0)
+
+
+def test_get_object_bbox_routes_spatial_query_without_vlm(image: Image) -> None:
+    detector = _FakeDetector(
+        {
+            "person": [
+                _FakeDetection("person", 0.95, (100, 0, 120, 20)),
+                _FakeDetection("person", 0.70, (0, 0, 20, 20)),
+            ]
+        }
+    )
+    bbox = get_object_bbox(_RaisingVlModel(), image, "the leftmost person", detector=detector)
+    assert bbox == (0.0, 0.0, 20.0, 20.0)  # geometric pick, VLM never touched
+
+
+def test_get_object_bbox_passes_prev_box_for_tracking(image: Image) -> None:
+    detector = _FakeDetector(
+        {
+            "person": [
+                _FakeDetection("person", 0.95, (200, 200, 240, 260)),
+                _FakeDetection("person", 0.70, (10, 10, 30, 40)),
+            ]
+        }
+    )
+    bbox = get_object_bbox(
+        _RaisingVlModel(), image, "person", detector=detector, prev_box=(11.0, 11.0, 31.0, 41.0)
+    )
+    assert bbox == (10.0, 10.0, 30.0, 40.0)

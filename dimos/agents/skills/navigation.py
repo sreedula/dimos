@@ -64,6 +64,10 @@ class NavigationSkillContainer(Module):
         # None (VLM-only) if YOLOE is unavailable in this deployment.
         self._grounding_detector: Any | None = None
         self._grounding_detector_built: bool = False
+        # Last grounded goal box, fed back as a tracking hint so re-grounding the
+        # same query across frames locks onto the same instance.
+        self._last_grounding_query: str | None = None
+        self._last_grounding_bbox: BBox | None = None
 
     @rpc
     def start(self) -> None:
@@ -243,12 +247,18 @@ class NavigationSkillContainer(Module):
         if self._latest_image is None:
             return None
 
-        return get_object_bbox(
+        # Track continuity: only reuse the prior box when the query is unchanged.
+        prev_box = self._last_grounding_bbox if query == self._last_grounding_query else None
+        bbox = get_object_bbox(
             self._vl_model,
             self._latest_image,
             query,
             detector=self._get_grounding_detector(),
+            prev_box=prev_box,
         )
+        self._last_grounding_query = query
+        self._last_grounding_bbox = bbox
+        return bbox
 
     def _navigate_using_semantic_map(self, query: str) -> str:
         results = self._spatial_memory.query_by_text(query)
