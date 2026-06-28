@@ -700,25 +700,49 @@ def _singularize_head(phrase: str) -> str:
     return " ".join(words)
 
 
-# Proximity relations: "the cup next to the laptop". Spaces around each form keep
-# them from matching inside words (e.g. "near" won't match "nearest").
+# Connector phrase -> canonical relation. Spaces around each form (in the regex)
+# keep them from matching inside words (e.g. "near" won't match "nearest").
+_RELATIONS: dict[str, str] = {
+    "next to": "near",
+    "closest to": "near",
+    "close to": "near",
+    "nearest to": "near",
+    "beside": "near",
+    "near": "near",
+    "to the left of": "left",
+    "left of": "left",
+    "to the right of": "right",
+    "right of": "right",
+    "above": "above",
+    "on top of": "above",
+    "over": "above",
+    "below": "below",
+    "under": "below",
+    "underneath": "below",
+    "beneath": "below",
+}
+# Longest connectors first so "to the left of" matches before "left of"/"of".
 _RELATION_RE = re.compile(
-    r"^(.+?)\s+(?:next to|closest to|close to|nearest to|beside|near)\s+(.+)$",
+    r"^(.+?)\s+("
+    + "|".join(re.escape(k) for k in sorted(_RELATIONS, key=len, reverse=True))
+    + r")\s+(.+)$",
     re.IGNORECASE,
 )
 
 
-def parse_relational_query(description: str) -> tuple[str, str] | None:
-    """Split "X near/next-to Y" into (object phrase, reference phrase), or None.
+def parse_relational_query(description: str) -> tuple[str, str, str] | None:
+    """Split "X <relation> Y" into (object, relation, reference), or None.
 
-    Recognizes proximity relations ("the cup next to the laptop") so the object
-    instance can be disambiguated by which one is closest to a reference object —
-    a relation YOLOE alone can't express.
+    Recognizes proximity ("next to", "near", "beside") and directional ("to the
+    left/right of", "above", "below") relations, so the object instance can be
+    disambiguated by its spatial relation to a reference object — relations YOLOE
+    alone can't express. ``relation`` is one of ``near``/``left``/``right``/
+    ``above``/``below``.
     """
     match = _RELATION_RE.match(" ".join(description.strip().split()))
     if not match:
         return None
-    return match.group(1).strip(), match.group(2).strip()
+    return match.group(1).strip(), _RELATIONS[match.group(2).lower()], match.group(3).strip()
 
 
 def select_by_nearest_to_reference(candidates: list[BBox], reference: BBox) -> BBox | None:
@@ -731,6 +755,43 @@ def select_by_nearest_to_reference(candidates: list[BBox], reference: BBox) -> B
         candidates,
         key=lambda b: ((b[0] + b[2]) / 2.0 - rx) ** 2 + ((b[1] + b[3]) / 2.0 - ry) ** 2,
     )
+
+
+def select_by_relation(candidates: list[BBox], relation: str, reference: BBox) -> BBox | None:
+    """Pick the candidate satisfying a spatial `relation` to the `reference` box.
+
+    ``near`` -> closest center. Directional relations (``left``/``right``/
+    ``above``/``below``) keep only candidates on the correct side of the
+    reference's center and return the one immediately adjacent to it; ``None`` if
+    nothing is on that side (so the caller can fall back to the VLM).
+    """
+    if not candidates:
+        return None
+    if relation == "near":
+        return select_by_nearest_to_reference(candidates, reference)
+
+    rx = (reference[0] + reference[2]) / 2.0
+    ry = (reference[1] + reference[3]) / 2.0
+
+    def cx(b: BBox) -> float:
+        return (b[0] + b[2]) / 2.0
+
+    def cy(b: BBox) -> float:
+        return (b[1] + b[3]) / 2.0
+
+    if relation == "left":
+        pool = [b for b in candidates if cx(b) < rx]
+        return max(pool, key=cx) if pool else None  # immediately left of the ref
+    if relation == "right":
+        pool = [b for b in candidates if cx(b) > rx]
+        return min(pool, key=cx) if pool else None
+    if relation == "above":
+        pool = [b for b in candidates if cy(b) < ry]
+        return max(pool, key=cy) if pool else None
+    if relation == "below":
+        pool = [b for b in candidates if cy(b) > ry]
+        return min(pool, key=cy) if pool else None
+    return None
 
 
 # Lower bound for the recall retry: still a real detection, not noise.
@@ -790,7 +851,7 @@ def resolve_grounding(
     if prev_box is None:
         relational = parse_relational_query(description)
         if relational is not None:
-            object_phrase, reference_phrase = relational
+            object_phrase, relation, reference_phrase = relational
             reference_box = ground_with_yoloe(
                 detector, image, _singularize_head(parse_grounding_query(reference_phrase)[0])
             )
@@ -798,8 +859,10 @@ def resolve_grounding(
                 detector, image, _singularize_head(parse_grounding_query(object_phrase)[0])
             )
             if reference_box is not None and obj_candidates:
-                return select_by_nearest_to_reference(obj_candidates, reference_box)
-            # Reference or object not found: let the VLM resolve the relation.
+                chosen = select_by_relation(obj_candidates, relation, reference_box)
+                if chosen is not None:
+                    return chosen
+            # Reference/object missing or nothing on that side: VLM resolves it.
             return None
 
     object_phrase, qualifier = parse_grounding_query(description)

@@ -39,6 +39,7 @@ from dimos.navigation.visual.grounding import (
     select_by_clip,
     select_by_nearest_to_reference,
     select_by_position,
+    select_by_relation,
     select_nearest,
     singularize,
 )
@@ -982,9 +983,13 @@ def test_clip_scores_handles_grayscale_image() -> None:
 @pytest.mark.parametrize(
     "query,expected",
     [
-        ("the cup next to the laptop", ("the cup", "the laptop")),
-        ("bottle near the keyboard", ("bottle", "the keyboard")),
-        ("a chair beside the table", ("a chair", "the table")),
+        ("the cup next to the laptop", ("the cup", "near", "the laptop")),
+        ("bottle near the keyboard", ("bottle", "near", "the keyboard")),
+        ("a chair beside the table", ("a chair", "near", "the table")),
+        ("the bottle to the left of the laptop", ("the bottle", "left", "the laptop")),
+        ("cup right of the plate", ("cup", "right", "the plate")),
+        ("the book above the desk", ("the book", "above", "the desk")),
+        ("a box under the chair", ("a box", "below", "the chair")),
         ("person", None),  # no relation
         ("the nearest person", None),  # "near" must not match inside "nearest"
     ],
@@ -999,6 +1004,21 @@ def test_select_by_nearest_to_reference() -> None:
     far = (0.0, 0.0, 20.0, 20.0)
     assert select_by_nearest_to_reference([far, near], reference) == near
     assert select_by_nearest_to_reference([], reference) is None
+
+
+def test_select_by_relation_directional() -> None:
+    reference = (100.0, 100.0, 140.0, 140.0)  # center (120, 120)
+    left = (0.0, 100.0, 40.0, 140.0)  # center cx=20  (left of ref)
+    right = (200.0, 100.0, 240.0, 140.0)  # center cx=220 (right of ref)
+    above = (100.0, 0.0, 140.0, 40.0)  # center cy=20  (above ref)
+    below = (100.0, 200.0, 140.0, 240.0)  # center cy=220 (below ref)
+    pool = [left, right, above, below]
+    assert select_by_relation(pool, "left", reference) == left
+    assert select_by_relation(pool, "right", reference) == right
+    assert select_by_relation(pool, "above", reference) == above
+    assert select_by_relation(pool, "below", reference) == below
+    # Nothing on the requested side -> None (caller falls to the VLM).
+    assert select_by_relation([right], "left", reference) is None
 
 
 def test_resolve_grounding_relational_picks_nearest(image: Image) -> None:
@@ -1023,3 +1043,27 @@ def test_resolve_grounding_relational_none_when_reference_missing(image: Image) 
     # Object present but reference absent -> None (caller falls to the VLM).
     detector = _FakeDetector({"cup": [_FakeDetection("cup", 0.9, (0, 0, 20, 20))]})
     assert resolve_grounding(detector, image, "the cup next to the laptop") is None
+
+
+def test_resolve_grounding_relational_directional_end_to_end(image: Image) -> None:
+    detector = _FakeDetector(
+        {
+            "laptop": [_FakeDetection("laptop", 0.9, (100, 100, 140, 140))],
+            "bottle": [
+                _FakeDetection("bottle", 0.9, (0, 100, 40, 140)),  # left of laptop
+                _FakeDetection("bottle", 0.8, (200, 100, 240, 140)),  # right of laptop
+            ],
+        }
+    )
+    assert resolve_grounding(detector, image, "the bottle to the left of the laptop") == (
+        0.0,
+        100.0,
+        40.0,
+        140.0,
+    )
+    assert resolve_grounding(detector, image, "the bottle right of the laptop") == (
+        200.0,
+        100.0,
+        240.0,
+        140.0,
+    )
