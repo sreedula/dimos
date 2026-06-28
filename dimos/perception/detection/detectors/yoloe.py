@@ -16,6 +16,7 @@ from enum import Enum
 import threading
 from typing import Any
 
+import cv2
 import numpy as np
 from numpy.typing import NDArray
 from ultralytics import YOLOE  # type: ignore[attr-defined]
@@ -140,6 +141,12 @@ class Yoloe2DDetector(Detector):
             ImageDetections2D containing all detected objects
         """
         source = image.to_opencv()
+        # YOLOE needs 3-channel input; a grayscale frame (a robot camera can emit
+        # one on an IR/mono mode or a glitch) would otherwise crash the model.
+        if source.ndim == 2:
+            source = cv2.cvtColor(source, cv2.COLOR_GRAY2BGR)
+        elif source.ndim == 3 and source.shape[2] == 1:
+            source = cv2.cvtColor(source[:, :, 0], cv2.COLOR_GRAY2BGR)
 
         with self._lock:
             if self._visual_prompts is not None:

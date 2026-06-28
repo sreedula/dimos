@@ -904,3 +904,20 @@ def test_yoloe_visual_prompt_path_and_mode_switch() -> None:
     assert len(detector.process_image(img).detections) >= 1
 
     detector.stop()
+
+
+@pytest.mark.self_hosted
+def test_yoloe_grounds_grayscale_frame() -> None:
+    """A single-channel (grayscale) frame is promoted to BGR, not crashed on."""
+    from pathlib import Path
+
+    import cv2
+    import ultralytics
+
+    bgr = cv2.imread(str(Path(ultralytics.__file__).parent / "assets" / "bus.jpg"))
+    gray = Image.from_numpy(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), format=ImageFormat.BGR)
+
+    detector = build_yoloe_grounding_detector(confidence=0.25)
+    assert detector is not None
+    assert len(ground_candidates_with_yoloe(detector, gray, "person")) > 0
+    detector.stop()
