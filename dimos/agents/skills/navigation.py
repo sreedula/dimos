@@ -29,7 +29,8 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3, make_vector3
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.navigation.base import NavigationState
 from dimos.navigation.navigation_spec import NavigationInterfaceSpec
-from dimos.navigation.visual.query import get_object_bbox_from_image
+from dimos.navigation.visual.grounding import build_yoloe_grounding_detector
+from dimos.navigation.visual.query import get_object_bbox
 from dimos.perception.object_tracking_spec import ObjectTrackingSpec
 from dimos.perception.spatial_memory_spec import SpatialMemorySpec
 from dimos.types.robot_location import RobotLocation
@@ -59,6 +60,10 @@ class NavigationSkillContainer(Module):
         from dimos.models.vl.qwen import QwenVlModel
 
         self._vl_model = QwenVlModel()
+        # YOLOE fast-path detector, built lazily on first grounding use; stays
+        # None (VLM-only) if YOLOE is unavailable in this deployment.
+        self._grounding_detector: Any | None = None
+        self._grounding_detector_built: bool = False
 
     @rpc
     def start(self) -> None:
@@ -227,11 +232,23 @@ class NavigationSkillContainer(Module):
         self._object_tracking.stop_track()
         return None
 
+    def _get_grounding_detector(self) -> Any | None:
+        """Lazily build the YOLOE fast-path detector once; None if unavailable."""
+        if not self._grounding_detector_built:
+            self._grounding_detector = build_yoloe_grounding_detector()
+            self._grounding_detector_built = True
+        return self._grounding_detector
+
     def _get_bbox_for_current_frame(self, query: str) -> BBox | None:
         if self._latest_image is None:
             return None
 
-        return get_object_bbox_from_image(self._vl_model, self._latest_image, query)
+        return get_object_bbox(
+            self._vl_model,
+            self._latest_image,
+            query,
+            detector=self._get_grounding_detector(),
+        )
 
     def _navigate_using_semantic_map(self, query: str) -> str:
         results = self._spatial_memory.query_by_text(query)

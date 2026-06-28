@@ -30,7 +30,36 @@ cost is skipped and only the detection runs.
 
 from __future__ import annotations
 
+from typing import Any
+
 from dimos.models.qwen.bbox import BBox
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
+
+
+def build_yoloe_grounding_detector() -> Any | None:
+    """Best-effort construct the YOLOE fast-path detector; ``None`` on any failure.
+
+    Grounding consumers use this to opt into the fast path without risking a
+    crash: if YOLOE — or its weights or text encoder — is unavailable in the
+    deployment, this returns ``None`` and the caller transparently falls back to
+    the VLM-only path. ``max_area_ratio=None`` keeps large objects (e.g. a close
+    person, a bus) instead of dropping anything over 30% of the frame.
+    """
+    try:
+        from dimos.perception.detection.detectors.yoloe import (
+            Yoloe2DDetector,
+            YoloePromptMode,
+        )
+
+        return Yoloe2DDetector(prompt_mode=YoloePromptMode.PROMPT, max_area_ratio=None)
+    except Exception:
+        logger.warning(
+            "YOLOE grounding detector unavailable; using VLM-only grounding.",
+            exc_info=True,
+        )
+        return None
 
 
 def ground_with_yoloe(detector, image, description: str) -> BBox | None:

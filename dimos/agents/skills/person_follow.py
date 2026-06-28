@@ -35,7 +35,8 @@ from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.navigation.visual.query import get_object_bbox_from_image
+from dimos.navigation.visual.grounding import build_yoloe_grounding_detector
+from dimos.navigation.visual.query import get_object_bbox
 from dimos.navigation.visual_servoing.detection_navigation import DetectionNavigation
 from dimos.navigation.visual_servoing.visual_servoing_2d import VisualServoing2D
 from dimos.utils.logging_config import setup_logger
@@ -72,6 +73,10 @@ class PersonFollowSkillContainer(Module):
         self._latest_image: Image | None = None
         self._latest_pointcloud: PointCloud2 | None = None
         self._vl_model: VlModel = create("qwen")
+        # YOLOE fast-path detector for the initial person acquisition, built
+        # lazily; stays None (VLM-only) if YOLOE is unavailable.
+        self._grounding_detector: Any | None = None
+        self._grounding_detector_built: bool = False
         self._tracker: EdgeTAMProcessor | None = None
         self._thread: Thread | None = None
         self._should_stop: Event = Event()
@@ -90,6 +95,13 @@ class PersonFollowSkillContainer(Module):
 
         self._visual_servo = VisualServoing2D(camera_info, bool(self.config.g.simulation))
         self._detection_navigation = DetectionNavigation(self.tf, camera_info)
+
+    def _get_grounding_detector(self) -> Any | None:
+        """Lazily build the YOLOE fast-path detector once; None if unavailable."""
+        if not self._grounding_detector_built:
+            self._grounding_detector = build_yoloe_grounding_detector()
+            self._grounding_detector_built = True
+        return self._grounding_detector
 
     @rpc
     def start(self) -> None:
@@ -112,6 +124,8 @@ class PersonFollowSkillContainer(Module):
                 self._tracker.stop()
                 self._tracker = None
 
+        if self._grounding_detector is not None:
+            self._grounding_detector.stop()
         self._vl_model.stop()
         super().stop()
 
@@ -176,10 +190,11 @@ class PersonFollowSkillContainer(Module):
                 if initial_image is not None:
                     detection_image = _decode_base64_image(initial_image)
             else:
-                detected = get_object_bbox_from_image(
+                detected = get_object_bbox(
                     self._vl_model,
                     latest_image,
                     query,
+                    detector=self._get_grounding_detector(),
                 )
                 if detected is None:
                     return f"Could not find '{query}' in the current view."

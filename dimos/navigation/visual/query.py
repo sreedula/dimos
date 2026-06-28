@@ -17,6 +17,9 @@ from dimos.models.vl.base import VlModel
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.navigation.visual.grounding import ground_with_yoloe
 from dimos.utils.generic import extract_json_from_llm_response
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 
 def get_object_bbox(
@@ -29,9 +32,13 @@ def get_object_bbox(
 
     When ``detector`` is provided, the open-vocab YOLOE detector is tried first
     (tens of ms). If it finds the object, that bbox is returned immediately. If
-    it finds nothing — or no detector was given — this falls back to the slower
-    Qwen-VLM path (``get_object_bbox_from_image``), so behavior is unchanged for
-    callers that don't pass a detector.
+    it finds nothing, errors out, or no detector was given, this falls back to
+    the slower Qwen-VLM path (``get_object_bbox_from_image``), so behavior is
+    unchanged for callers that don't pass a detector.
+
+    The fast path is best-effort: any exception from the detector (e.g. a model
+    that failed to load, a missing text encoder) is swallowed and treated as a
+    miss, so a broken fast path can never be worse than the VLM-only baseline.
 
     Args:
         vl_model: Vision-language model used for the fallback grounding.
@@ -45,7 +52,14 @@ def get_object_bbox(
         found it.
     """
     if detector is not None:
-        bbox = ground_with_yoloe(detector, image, object_description)
+        try:
+            bbox = ground_with_yoloe(detector, image, object_description)
+        except Exception:
+            logger.warning(
+                "YOLOE fast-path grounding failed; falling back to the VLM.",
+                exc_info=True,
+            )
+            bbox = None
         if bbox is not None:
             return bbox
 
