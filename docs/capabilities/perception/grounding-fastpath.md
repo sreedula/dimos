@@ -39,7 +39,12 @@ get_object_bbox(vl_model, image, "the red mug",         detector=detector)  # ap
 # instead of jumping to a higher-confidence different instance.
 prev = get_object_bbox(vl_model, image, "person", detector=detector)
 prev = get_object_bbox(vl_model, next_image, "person", detector=detector, prev_box=prev)
+
+# Multi-object: every instance of a class (counting, iterating targets).
+boxes = get_object_bboxes(vl_model, image, "person", detector=detector)  # e.g. 5 boxes
 ```
+
+`get_object_bboxes` returns *all* matching boxes (highest-confidence first) for an in-vocabulary class; for a query YOLOE can't ground it falls back to the VLM's single box. (On `bus.jpg`, `"person"` → 5 boxes with no VLM call.)
 
 - **Spatial** — `leftmost / rightmost / topmost / bottommost / largest (biggest, nearest) / smallest / center`, plus **ordinals** like "the second chair from the left" or "the last person from the right", all resolved geometrically.
 - **Appearance** — a multi-word phrase ("red mug") re-ranks same-class candidates by CLIP similarity; degrades to the top box if CLIP is unavailable.

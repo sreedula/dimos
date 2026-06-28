@@ -12,10 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
+
 from dimos.models.qwen.bbox import BBox
 from dimos.models.vl.base import VlModel
 from dimos.msgs.sensor_msgs.Image import Image
-from dimos.navigation.visual.grounding import resolve_grounding
+from dimos.navigation.visual.grounding import (
+    ground_candidates_with_yoloe,
+    parse_grounding_query,
+    resolve_grounding,
+)
 from dimos.utils.generic import extract_json_from_llm_response
 from dimos.utils.logging_config import setup_logger
 
@@ -72,6 +78,55 @@ def get_object_bbox(
             return bbox
 
     return get_object_bbox_from_image(vl_model, image, object_description)
+
+
+def get_object_bboxes(
+    vl_model: VlModel,
+    image: Image,
+    object_description: str,
+    detector=None,
+) -> list[BBox]:
+    """Ground ALL instances of ``object_description`` — e.g. "count the people".
+
+    The single-box ``get_object_bbox`` answers "where is the X"; this answers
+    "where are all the X". With a ``detector`` it returns every YOLOE match
+    (each ``(x1, y1, x2, y2)``); on a miss or with no detector it falls back to
+    the VLM, which yields at most one box, so the result is ``[box]`` or ``[]``.
+    Any spatial qualifier in the description is ignored — "all" means all.
+
+    Args:
+        vl_model: Vision-language model used for the single-box fallback.
+        image: Image to ground against.
+        object_description: Natural-language name of the object class to locate.
+        detector: Optional open-vocab detector for the fast path.
+
+    Returns:
+        A list of bounding boxes (possibly empty), highest-confidence first.
+    """
+    if detector is not None:
+        try:
+            object_phrase, _ = parse_grounding_query(object_description)
+            # "all the chairs" / "every dog" -> ground the bare class.
+            object_phrase = re.sub(
+                r"^\s*(all of the|all the|all|every|each|the|a|an)\s+",
+                "",
+                object_phrase,
+                flags=re.IGNORECASE,
+            ).strip()
+            boxes = ground_candidates_with_yoloe(
+                detector, image, object_phrase or object_description
+            )
+        except Exception:
+            logger.warning(
+                "YOLOE multi-object grounding failed; falling back to the VLM.",
+                exc_info=True,
+            )
+            boxes = []
+        if boxes:
+            return boxes
+
+    single = get_object_bbox_from_image(vl_model, image, object_description)
+    return [single] if single is not None else []
 
 
 def get_object_bbox_from_image(

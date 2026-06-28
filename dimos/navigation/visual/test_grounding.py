@@ -39,7 +39,11 @@ from dimos.navigation.visual.grounding import (
     select_by_position,
     select_nearest,
 )
-from dimos.navigation.visual.query import get_object_bbox, get_object_bbox_from_image
+from dimos.navigation.visual.query import (
+    get_object_bbox,
+    get_object_bbox_from_image,
+    get_object_bboxes,
+)
 
 
 class _FakeDetection:
@@ -685,6 +689,32 @@ class _TripwireVlModel:
     def query(self, image, query):
         self.called = True
         return '{"bbox": [1, 2, 3, 4]}'
+
+
+def test_get_object_bboxes_returns_all_candidates_without_vlm(image: Image) -> None:
+    detector = _FakeDetector(
+        {
+            "chairs": [  # "all the chairs" -> grounds the bare class "chairs"
+                _FakeDetection("chair", 0.9, (0, 0, 10, 10)),
+                _FakeDetection("chair", 0.8, (20, 0, 30, 10)),
+                _FakeDetection("chair", 0.7, (40, 0, 50, 10)),
+            ]
+        }
+    )
+    boxes = get_object_bboxes(_RaisingVlModel(), image, "all the chairs", detector=detector)
+    assert boxes == [(0.0, 0.0, 10.0, 10.0), (20.0, 0.0, 30.0, 10.0), (40.0, 0.0, 50.0, 10.0)]
+
+
+def test_get_object_bboxes_falls_back_to_single_vlm_box(image: Image) -> None:
+    detector = _FakeDetector({})  # YOLOE finds nothing
+    vl = _StubVlModel('{"bbox": [1, 2, 3, 4]}')
+    assert get_object_bboxes(vl, image, "chair", detector=detector) == [(1.0, 2.0, 3.0, 4.0)]
+    assert vl.calls == 1
+
+
+def test_get_object_bboxes_empty_when_nothing_found(image: Image) -> None:
+    vl = _StubVlModel("no json here")  # extract_json -> None
+    assert get_object_bboxes(vl, image, "chair") == []
 
 
 @pytest.mark.self_hosted
