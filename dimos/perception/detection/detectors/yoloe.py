@@ -77,6 +77,9 @@ class Yoloe2DDetector(Detector):
         self.max_area_ratio = max_area_ratio
         self.confidence = confidence
         self.iou_threshold = iou_threshold
+        # Cache of text-prompt embeddings (get_text_pe is a ~100ms encoder pass);
+        # repeated/alternating prompts then skip the re-encode.
+        self._text_pe_cache: dict[tuple[str, ...], Any] = {}
         self._lock = threading.Lock()
 
         if prompt_mode == YoloePromptMode.PROMPT:
@@ -124,7 +127,12 @@ class Yoloe2DDetector(Detector):
         with self._lock:
             self.model.predictor = None
             if text is not None:
-                self.model.set_classes(text, self.model.get_text_pe(text))  # type: ignore[no-untyped-call]
+                key = tuple(text)
+                text_pe = self._text_pe_cache.get(key)
+                if text_pe is None:
+                    text_pe = self.model.get_text_pe(text)  # type: ignore[no-untyped-call]
+                    self._text_pe_cache[key] = text_pe
+                self.model.set_classes(text, text_pe)  # type: ignore[no-untyped-call]
                 self._visual_prompts = None
             else:
                 cls = np.arange(len(bboxes), dtype=np.int16)  # type: ignore[arg-type]

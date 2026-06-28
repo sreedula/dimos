@@ -1095,3 +1095,27 @@ def test_resolve_grounding_relational_uses_recall_retry(image: Image) -> None:
         130.0,
     )
     assert detector.confidence == 0.6  # restored
+
+
+@pytest.mark.self_hosted
+def test_yoloe_text_pe_cache_skips_reencode() -> None:
+    """A repeated text prompt reuses its cached embedding (encoder runs once)."""
+    detector = build_yoloe_grounding_detector()
+    assert detector is not None
+    detector._text_pe_cache.clear()
+
+    calls: list = []
+    original = detector.model.get_text_pe
+
+    def counting(text):
+        calls.append(tuple(text))
+        return original(text)
+
+    detector.model.get_text_pe = counting
+    detector.set_prompts(text=["cup"])
+    detector.set_prompts(text=["laptop"])
+    detector.set_prompts(text=["cup"])  # cached -> no re-encode
+
+    assert calls.count(("cup",)) == 1  # encoded once despite two set_prompts
+    assert calls.count(("laptop",)) == 1
+    detector.stop()
