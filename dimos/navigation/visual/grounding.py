@@ -30,12 +30,20 @@ cost is skipped and only the detection runs.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
+
+import numpy as np
 
 from dimos.models.qwen.bbox import BBox
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
+
+# Lazily-loaded, process-wide CLIP cache (see :func:`_load_clip`). A CLIP load is
+# seconds of work and the weights are hundreds of MB, so the model and its
+# preprocessing transform are built once on first use and reused thereafter.
+_clip_model: Any = None
+_clip_preprocess: Callable[..., Any] | None = None
 
 
 def build_yoloe_grounding_detector() -> Any | None:
@@ -200,3 +208,166 @@ def ground_with_position(
     if qualifier is None:
         return candidates[0] if candidates else None
     return select_by_position(candidates, qualifier)
+
+
+def _load_clip() -> tuple[Any, Callable[..., Any]]:
+    """Lazily build and cache the CLIP ViT-B/32 model + preprocess on CPU.
+
+    The model is constructed on first use and memoized at module level so every
+    subsequent re-rank reuses it — a CLIP load is seconds of work and the weights
+    are hundreds of MB. Kept on CPU deliberately: re-ranking a handful of crops is
+    cheap and the fast path must not contend for the GPU the detector may hold.
+
+    Raises:
+        RuntimeError: If the ``clip`` package or ``torch`` cannot be imported, so
+            the resilient router can fall back to the geometry- or VLM-only paths
+            instead of crashing.
+    """
+    global _clip_model, _clip_preprocess
+    if _clip_model is None or _clip_preprocess is None:
+        try:
+            import clip
+            import torch
+        except ImportError as e:
+            raise RuntimeError(
+                "CLIP attribute re-ranking needs the `clip` package and torch, "
+                "neither of which is importable in this deployment."
+            ) from e
+
+        model, preprocess = clip.load("ViT-B/32", device="cpu")
+        model.eval()
+        torch.set_grad_enabled(False)
+        _clip_model, _clip_preprocess = model, preprocess
+    return _clip_model, _clip_preprocess
+
+
+def clip_scores(image, candidates: list[BBox], phrase: str) -> list[float]:
+    """CLIP cosine similarity of each candidate's crop to `phrase`.
+
+    For every candidate box this crops that region out of the image, encodes the
+    crop and the text `phrase` with CLIP, and returns their cosine similarity —
+    one float per candidate, in the same order as ``candidates``. This is what
+    lets re-ranking honour attributive language ("the red mug") that the detector
+    and geometry alone can't resolve.
+
+    The CLIP model is loaded lazily and cached at module level (see
+    :func:`_load_clip`), so only the first call pays the load cost. Runs on CPU.
+
+    Args:
+        image: The ``dimos.msgs.sensor_msgs.Image`` the boxes were grounded in;
+            ``image.to_opencv()`` supplies the BGR pixels, converted to RGB here.
+        candidates: ``(x1, y1, x2, y2)`` boxes to score, in pixel coordinates.
+        phrase: The attributive phrase to match each crop against, e.g. "red mug".
+
+    Returns:
+        One cosine-similarity float per candidate, in ``candidates`` order. Empty
+        list if ``candidates`` is empty.
+
+    Raises:
+        RuntimeError: If CLIP/torch are unavailable (propagated from
+            :func:`_load_clip`).
+    """
+    if not candidates:
+        return []
+
+    import clip
+    import torch
+    from PIL import Image as PILImage
+
+    model, preprocess = _load_clip()
+
+    # BGR -> RGB; a contiguous copy keeps PIL happy with the reversed-stride view.
+    rgb = np.ascontiguousarray(image.to_opencv()[:, :, ::-1])
+    height, width = rgb.shape[:2]
+
+    crops = []
+    for x1, y1, x2, y2 in candidates:
+        # Clamp to the frame and guard degenerate/empty boxes: a zero-area crop
+        # would make PIL choke, so such a box falls back to the whole frame (it
+        # simply scores uninformatively rather than crashing the batch).
+        ix1 = max(0, min(int(round(x1)), width - 1))
+        iy1 = max(0, min(int(round(y1)), height - 1))
+        ix2 = max(ix1 + 1, min(int(round(x2)), width))
+        iy2 = max(iy1 + 1, min(int(round(y2)), height))
+        crop = rgb[iy1:iy2, ix1:ix2]
+        if crop.size == 0:
+            crop = rgb
+        crops.append(preprocess(PILImage.fromarray(crop)))
+
+    batch = torch.stack(crops)
+    text = clip.tokenize([phrase])
+
+    with torch.no_grad():
+        image_features = model.encode_image(batch)
+        text_features = model.encode_text(text)
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        # (N, D) @ (D, 1) -> (N, 1) cosine similarities, one row per crop.
+        sims = (image_features @ text_features.T).squeeze(-1)
+
+    return [float(s) for s in sims]
+
+
+def select_by_clip(
+    image,
+    candidates: list[BBox],
+    phrase: str,
+    *,
+    scorer: Callable[[Any, list[BBox], str], list[float]] | None = None,
+) -> BBox | None:
+    """Pick the candidate whose crop best matches `phrase`, by CLIP similarity.
+
+    The attributive counterpart to :func:`select_by_position`: where that
+    disambiguates same-class boxes by geometry, this disambiguates them by
+    appearance — returning the box whose image content scores highest against
+    `phrase`. Use it for queries geometry can't answer, like "the red mug" among
+    several mugs or "the person in a blue shirt".
+
+    Args:
+        image: The ``dimos.msgs.sensor_msgs.Image`` the boxes were grounded in.
+        candidates: ``(x1, y1, x2, y2)`` boxes to choose among.
+        phrase: The attributive phrase to match against, e.g. "red mug".
+        scorer: Callable ``(image, candidates, phrase) -> list[float]`` returning
+            one score per candidate; defaults to :func:`clip_scores`. Injectable
+            so unit tests can pass a fake scorer and avoid loading CLIP.
+
+    Returns:
+        The highest-scoring ``(x1, y1, x2, y2)`` box, or ``None`` if
+        ``candidates`` is empty. Ties resolve to the earliest such box in
+        ``candidates`` order.
+    """
+    if not candidates:
+        return None
+    score = scorer if scorer is not None else clip_scores
+    scores = score(image, candidates, phrase)
+    best = max(range(len(candidates)), key=lambda i: scores[i])
+    return candidates[best]
+
+
+def ground_with_attribute(
+    detector, image, object_noun: str, phrase: str | None = None
+) -> BBox | None:
+    """Ground `object_noun` and optionally re-rank its matches by `phrase`.
+
+    A thin convenience over :func:`ground_candidates_with_yoloe`: it grounds the
+    bare object class (e.g. "mug"), then with an attributive ``phrase`` returns
+    the crop that best matches it via :func:`select_by_clip` ("the red mug");
+    without one it returns the top-confidence box, matching
+    :func:`ground_with_yoloe`. Detecting the plain noun and re-ranking by
+    appearance beats prompting the detector with the full phrase, which open-vocab
+    detectors handle poorly.
+
+    Args:
+        detector: A constructed open-vocab detector.
+        image: A ``dimos.msgs.sensor_msgs.Image`` to ground against.
+        object_noun: The bare object class to detect, e.g. "mug".
+        phrase: Optional attributive phrase to re-rank candidates by, e.g.
+            "red mug".
+
+    Returns:
+        The chosen ``(x1, y1, x2, y2)`` bbox, or ``None`` if nothing matched.
+    """
+    candidates = ground_candidates_with_yoloe(detector, image, object_noun)
+    if phrase is None:
+        return candidates[0] if candidates else None
+    return select_by_clip(image, candidates, phrase)

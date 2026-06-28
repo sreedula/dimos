@@ -27,8 +27,10 @@ from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.navigation.visual.grounding import (
     build_yoloe_grounding_detector,
     ground_candidates_with_yoloe,
+    ground_with_attribute,
     ground_with_position,
     ground_with_yoloe,
+    select_by_clip,
     select_by_position,
 )
 from dimos.navigation.visual.query import get_object_bbox, get_object_bbox_from_image
@@ -294,3 +296,109 @@ def test_ground_with_position_returns_none_for_absent_object(image: Image) -> No
 
     assert ground_with_position(detector, image, "banana", qualifier="leftmost") is None
     assert ground_with_position(detector, image, "banana") is None
+
+
+# --- CLIP attribute re-ranking (Phase 2) ----------------------------------
+#
+# These stay fully stubbed: an injected fake scorer stands in for CLIP, so no
+# weights, network, or torch are touched. The real CLIP path is exercised by the
+# self_hosted test at the bottom of this file.
+
+
+def test_select_by_clip_picks_argmax_candidate_via_injected_scorer(image: Image) -> None:
+    boxes = [(0.0, 0.0, 1.0, 1.0), (2.0, 2.0, 3.0, 3.0), (4.0, 4.0, 5.0, 5.0)]
+
+    # Fake scorer: the middle box scores highest, so it must be chosen — without
+    # loading CLIP at all.
+    def fake_scorer(img, candidates, phrase):  # noqa: ANN001, ANN202
+        assert candidates == boxes
+        return [0.1, 0.9, 0.3]
+
+    assert select_by_clip(image, boxes, "red mug", scorer=fake_scorer) == (2.0, 2.0, 3.0, 3.0)
+
+
+def test_select_by_clip_returns_none_on_empty(image: Image) -> None:
+    # No candidates -> nothing to rank. The (default) scorer must never be called.
+    def _boom(img, candidates, phrase):  # noqa: ANN001, ANN202
+        raise AssertionError("scorer must not run on empty candidates")
+
+    assert select_by_clip(image, [], "red mug", scorer=_boom) is None
+
+
+def test_ground_with_attribute_without_phrase_returns_top_confidence(image: Image) -> None:
+    detector = _FakeDetector(
+        {
+            "mug": [
+                _FakeDetection("mug", 0.80, (0, 0, 10, 10)),
+                _FakeDetection("mug", 0.95, (50, 0, 60, 10)),
+            ]
+        }
+    )
+
+    # No phrase -> behaves like ground_with_yoloe: top-confidence box wins.
+    assert ground_with_attribute(detector, image, "mug") == (50.0, 0.0, 60.0, 10.0)
+
+
+def test_ground_with_attribute_with_phrase_reranks_via_clip(image: Image, monkeypatch) -> None:
+    detector = _FakeDetector(
+        {
+            "mug": [
+                _FakeDetection("mug", 0.95, (50, 0, 60, 10)),  # top confidence
+                _FakeDetection("mug", 0.80, (0, 0, 10, 10)),  # lower confidence
+            ]
+        }
+    )
+
+    # Stub the module-level clip_scores so select_by_clip re-ranks without CLIP:
+    # the lower-confidence box scores highest and so must override confidence.
+    def fake_clip_scores(img, candidates, phrase):  # noqa: ANN001, ANN202
+        assert phrase == "red mug"
+        return [0.2, 0.8]
+
+    monkeypatch.setattr(
+        "dimos.navigation.visual.grounding.clip_scores", fake_clip_scores
+    )
+
+    assert ground_with_attribute(detector, image, "mug", phrase="red mug") == (
+        0.0,
+        0.0,
+        10.0,
+        10.0,
+    )
+
+
+def test_ground_with_attribute_returns_none_for_absent_object(image: Image) -> None:
+    detector = _FakeDetector({"mug": [_FakeDetection("mug", 0.9, (1, 2, 3, 4))]})
+
+    assert ground_with_attribute(detector, image, "banana") is None
+    assert ground_with_attribute(detector, image, "banana", phrase="red banana") is None
+
+
+@pytest.mark.self_hosted
+def test_clip_reranks_real_bus_crops() -> None:
+    """Real CLIP end-to-end: re-rank two literal crops of the ultralytics bus.jpg.
+
+    Deselected from the default suite (self_hosted): it loads the actual CLIP
+    weights and proves the real re-ranking path picks the crop matching the
+    phrase. The image is split into a left and a right half, and CLIP is asked
+    which better matches "a red bus" — the bus dominates the left/center of the
+    asset, so that crop must win.
+    """
+    import cv2
+    from ultralytics.utils import ASSETS
+
+    from dimos.navigation.visual.grounding import clip_scores, select_by_clip
+
+    bgr = cv2.imread(str(ASSETS / "bus.jpg"))
+    assert bgr is not None, "bus.jpg asset not found"
+    h, w = bgr.shape[:2]
+    img = Image.from_numpy(bgr, format=ImageFormat.BGR)
+
+    left = (0.0, 0.0, w / 2.0, float(h))  # the red bus
+    right = (w / 2.0, 0.0, float(w), float(h))  # mostly the person on the right
+    candidates = [left, right]
+
+    scores = clip_scores(img, candidates, "a red bus")
+    assert len(scores) == 2
+    assert scores[0] > scores[1]  # the bus half matches "a red bus" better
+    assert select_by_clip(img, candidates, "a red bus") == left
