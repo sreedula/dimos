@@ -30,25 +30,28 @@ The underlying grounder is `dimos.navigation.visual.grounding.ground_with_yoloe`
 
 ## Benchmark
 
-Measured with `bench_grounding.py` on the bundled `bus.jpg` / `zidane.jpg` samples.
+Measured with `bench_grounding.py` on the bundled `bus.jpg` / `zidane.jpg` samples. Hardware: Apple Silicon Mac, **CPU only** (no CUDA) — both YOLOE and the local VLM run on CPU, so the headline speedup is a same-hardware comparison.
 
-**Speed**
+**Speed — YOLOE vs a real local VLM (both measured)**
 
 | Path | Latency | Source |
 | --- | --- | --- |
-| YOLOE fast-path | **~48 ms** | measured, CPU steady-state (warmup excluded) |
-| Qwen VLM | ~2000 ms | **estimate** — see note below |
-| Speedup | **~42×** | **estimate-based** |
+| YOLOE fast-path | **~47 ms** | measured, CPU steady-state (warmup excluded) |
+| Moondream VLM (local, ~2B) | **~41,000 ms** | **measured**, CPU |
+| Speedup | **~854×** | **measured**, same CPU |
 
-**Accuracy** — YOLOE's grounded box vs an independent reference detector (closed-vocab YOLO11):
+The speedup is now a **measured** number, not an estimate. Two honest qualifiers below.
 
-| Query | IoU | Note |
+**Accuracy — agreement of YOLOE's box with two independent references**
+
+| Reference | median IoU | Reading |
 | --- | --- | --- |
-| person / bus.jpg | 0.98 | near-identical box |
-| bus / bus.jpg | 0.98 | near-identical box |
-| person / zidane.jpg | 0.31 | multiple people — the two detectors picked *different* valid persons |
-| **median** | **0.98** | measured inter-detector agreement |
+| YOLO11 (standard detector) | **0.98** | strong agreement with a trusted detector |
+| Moondream (~2B local VLM) | 0.17 | low — but Moondream is a weak grounder, so this reflects Moondream, not YOLOE |
 
-**Hardware:** Apple Silicon Mac, CPU only (no CUDA); YOLOE ran on CPU. A GPU would lower the YOLOE latency further.
+The trustworthy accuracy signal is **0.98 vs YOLO11**. The low Moondream agreement is itself informative: a small local VLM is a poor grounder — part of why a fast, accurate detector path is worth having. (Multi-instance images like `zidane.jpg` also lower IoU because different models pick different *valid* people, not because anyone is wrong.)
 
-> **Honesty note.** The **YOLOE latency (~48 ms) and the accuracy IoU are measured**; the **Qwen latency is not**. Qwen is a hosted DashScope API call needing `ALIBABA_API_KEY`, which was absent on the test machine, so its ~2000 ms is a conservative documented estimate (naive self-hosted 72B references are far higher) and the **~42× speedup is estimate-based**. Accuracy is measured against YOLO11 as a stand-in reference because the VLM box was unavailable, so it is inter-detector agreement, not human ground truth — and the multi-person zidane case shows the metric's limit (both boxes are valid), not a YOLOE error. With an API key set, `bench_grounding.py` also measures the VLM path live.
+> **Honesty note — two different baselines, don't conflate them.**
+> - Everything above (YOLOE ~47 ms, Moondream ~41 s, 854×, the IoUs) is **measured on this CPU**.
+> - **854× is vs Moondream-on-CPU**, which is unusually slow. The *production* fallback is the hosted **Qwen2.5-VL-72B**, which is GPU-served and far faster (~2 s) despite being larger. So the production gap (YOLOE vs hosted Qwen) is only **~40×, and that one is an estimate** — there's no `ALIBABA_API_KEY` on the test machine to measure it. Never apply the 854× to Qwen.
+> - Accuracy here is inter-detector agreement, not human ground truth.

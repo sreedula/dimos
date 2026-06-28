@@ -1,41 +1,62 @@
-"""Head-to-head grounding benchmark: YOLOE fast-path vs Qwen-VLM slow-path.
+"""Head-to-head grounding benchmark: YOLOE fast-path vs a LOCAL VLM (Moondream).
 
 WHAT THIS COMPARES
   - Fast path : dimos.navigation.visual.grounding.ground_with_yoloe  (open-vocab
-                YOLOE detector, runs locally).
-  - Slow path : dimos.navigation.visual.query.get_object_bbox_from_image, which
-                grounds via the repo's real Qwen VL model
-                (dimos.models.vl.create.create("qwen") -> qwen2.5-vl-72b-instruct,
-                a HOSTED Alibaba DashScope API call).
+                YOLOE detector, runs locally on CPU).
+  - Slow path : a LOCAL vision-language model, Moondream
+                (dimos.models.vl.create.create("moondream") -> vikhyatk/moondream2),
+                grounded via its native ``query_detections`` -> ``model.detect``
+                API. This needs NO API key and runs entirely on this machine, so
+                BOTH its latency and its bounding box are MEASURED here.
+
+  A note on the hosted Qwen VLM, which the production fallback actually uses:
+  Qwen2.5-VL-72B is reached over Alibaba's hosted DashScope API and needs an
+  ALIBABA_API_KEY that is absent on this host, so it cannot be measured here. It
+  is reported ONLY as a clearly-labeled SECONDARY ESTIMATE at the end. CRUCIAL:
+  the measured Moondream speedup (~854x) is NOT transferable to Qwen. Moondream
+  here is a small model on CPU (~41 s/call); the hosted Qwen is GPU-served and
+  far faster (~2 s) despite being larger. So the production gap (YOLOE vs hosted
+  Qwen) is only ~40x and is itself an estimate. The two baselines — local model
+  on CPU vs hosted model on GPU — are different; never apply one's number to the
+  other.
 
 METHODOLOGY (read before trusting any number)
-  - Hardware: CPU-only Mac (Apple Silicon, arm64), no CUDA. YOLOE runs on CPU.
+  - Hardware: CPU-only Mac (Apple Silicon, arm64), no CUDA. BOTH YOLOE and
+    Moondream run on CPU here, so the speedup is a same-hardware comparison.
+  - We deliberately force Moondream onto the genuine CPU path. Moondream's
+    vendored ``vision.py`` installs an MPS-routing monkeypatch at import time when
+    ``torch.backends.mps.is_available()`` is true, which then collides with the
+    CPU-loaded weights ("Passed CPU tensor to MPS op"). Hiding MPS BEFORE the
+    remote code is imported (see top of file) keeps every op on CPU and matches
+    the CPU-only YOLOE baseline. This is a measurement-harness workaround, not a
+    change to the shipped model.
   - YOLOE latency is MEASURED: per query we do untimed warmup calls (model init +
-    prompt encode), then time N steady-state calls and report the median. Warmup
-    is excluded for both paths by construction.
-  - Qwen latency is the honest weak spot on this host. Qwen is NOT a local model;
-    it is a hosted 72B VLM reached over an OpenAI-compatible API that requires an
-    ALIBABA_API_KEY. This script ACTUALLY ATTEMPTS one real Qwen call. If that
-    call succeeds, its latency and bbox are MEASURED and used directly. If it
-    fails (e.g. no API key on this machine), the script prints a
-    MEASUREMENT-UNAVAILABLE note and falls back to a clearly-labeled ESTIMATE —
-    it does NOT invent a measured number.
-  - Qwen latency ESTIMATE basis (used only when the live call is unavailable):
-    naive self-hosted Qwen2.5-VL-72B is reported at ~25-35 s/image on a single
-    H100/A6000 GPU; a production hosted endpoint (DashScope) uses optimized
-    serving and is typically a few seconds for one image + short JSON output. We
-    use a deliberately CONSERVATIVE 2000 ms representative (range ~1.5-5 s) so the
-    speedup is not overstated. Sources:
-      https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ/discussions/4
-      https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-dashscope
-  - Accuracy is MEASURED as IoU + center-distance against an independent
-    closed-vocab reference detector (YOLO11), since the VLM box is unavailable
-    here. This is inter-detector agreement, not human ground truth; when several
-    instances match (e.g. multiple people in one frame) the two models may lock
-    onto different valid boxes, lowering IoU without either being "wrong".
+    prompt encode), then time N steady-state calls and report the median.
+  - Moondream latency is MEASURED: one untimed warmup call (covers the one-time
+    weight download + model load + first-shape compile) is excluded, then each
+    query is timed with a single real ``query_detections`` call. On CPU this is
+    many seconds per call by design — that slowness is exactly the cost the YOLOE
+    fast-path removes.
+  - Moondream returns one box per detected instance with NO confidence score, so
+    as its single "grounded box" we take the LARGEST-AREA detection (the dominant
+    instance). We do NOT pick the box that best matches YOLOE — no cherry-picking.
+  - Accuracy is MEASURED two ways: (1) IoU between YOLOE's grounded box and
+    Moondream's grounded box (real VLM-vs-fast-path agreement), and (2) IoU +
+    center-distance against an independent closed-vocab reference detector
+    (YOLO11). Both are inter-detector agreement, not human ground truth; when
+    several instances match (e.g. multiple people in one frame) two models may
+    lock onto different valid boxes, lowering IoU without either being "wrong".
 """
 
 from __future__ import annotations
+
+# Force Moondream's genuine CPU path: its vendored vision.py monkeypatches
+# adaptive_avg_pool2d to route through "mps" if MPS looks available at import
+# time, which collides with the CPU-loaded weights. Hide MPS before any remote
+# model code is imported so every op stays on CPU (fair vs CPU-only YOLOE).
+import torch
+
+torch.backends.mps.is_available = lambda: False  # noqa: E305  (must precede model import)
 
 import statistics
 import time
@@ -46,10 +67,9 @@ import ultralytics
 from dimos.models.vl.create import create
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.navigation.visual.grounding import ground_with_yoloe
-from dimos.navigation.visual.query import get_object_bbox_from_image
 from dimos.perception.detection.detectors.yoloe import Yoloe2DDetector, YoloePromptMode
 
-# Conservative hosted-API estimate, used ONLY if the live Qwen call is unavailable.
+# Hosted-Qwen number is a SECONDARY documented estimate only (no API key here).
 QWEN_EST_MS = 2000.0  # representative; documented range ~1500-5000 ms (see header)
 YOLO_TIMED_RUNS = 5
 
@@ -89,15 +109,25 @@ def time_yolo(detector, image, query) -> tuple[tuple | None, float]:
     return bbox, statistics.median(samples)
 
 
-def probe_qwen(vl_model, image) -> tuple[bool, str]:
-    """Attempt one real Qwen call. Return (measured_ok, reason)."""
-    try:
-        t0 = time.perf_counter()
-        _ = get_object_bbox_from_image(vl_model, image, "person")
-        dt = (time.perf_counter() - t0) * 1000.0
-        return True, f"live call OK ({dt:.0f} ms warmup)"
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
+def moondream_box(vl_model, image, query) -> tuple | None:
+    """Ground ``query`` with Moondream's native detector; return one (x1,y1,x2,y2).
+
+    Moondream emits one box per instance with no confidence, so we return the
+    largest-area detection as the single grounded box (no cherry-picking against
+    YOLOE). ``None`` if Moondream found nothing.
+    """
+    dets = vl_model.query_detections(image, query)
+    boxes = [tuple(float(v) for v in d.bbox) for d in dets.detections]
+    if not boxes:
+        return None
+    return max(boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+
+
+def time_moondream(vl_model, image, query) -> tuple[tuple | None, float]:
+    """Return (bbox, measured_ms) for one real Moondream grounding call (warmup excluded)."""
+    t0 = time.perf_counter()
+    bbox = moondream_box(vl_model, image, query)
+    return bbox, (time.perf_counter() - t0) * 1000.0
 
 
 def build_reference_detector():
@@ -139,18 +169,30 @@ def main() -> int:
 
     detector = Yoloe2DDetector(prompt_mode=YoloePromptMode.PROMPT, max_area_ratio=None)
 
-    # Build the REAL Qwen model and actually try it once (honest probe).
-    vl_model = create("qwen")
-    qwen_ok, qwen_reason = probe_qwen(vl_model, cases[0][1])
-    print(f"qwen probe: model={vl_model.config.model_name}  measured={qwen_ok}  ({qwen_reason})")
-    if not qwen_ok:
+    # Build the REAL local Moondream VLM and warm it up (download + load + first
+    # compile), all UNTIMED. If it cannot load or produce a box on this machine,
+    # we do not fake numbers: we drop to a clearly-labeled estimate path.
+    vl_model = create("moondream")
+    moondream_ok = True
+    moondream_reason = ""
+    print(f"moondream: building {vl_model.config.model_name} on device={vl_model.config.device} ...")
+    try:
+        t0 = time.perf_counter()
+        warm = moondream_box(vl_model, cases[0][1], cases[0][2])
+        warm_s = time.perf_counter() - t0
+        print(f"moondream warmup OK in {warm_s:.0f}s (untimed); warmup box={warm}")
+    except Exception as e:  # noqa: BLE001 - report any load/inference failure honestly
+        moondream_ok = False
+        moondream_reason = f"{type(e).__name__}: {e}"
+        print(f"moondream warmup FAILED: {moondream_reason}")
+
+    if not moondream_ok:
         print(
-            "\n*** MEASUREMENT-UNAVAILABLE: live Qwen latency could not be measured on "
-            "this host. ***\n"
-            "    Reason: the hosted DashScope API needs ALIBABA_API_KEY, which is not set\n"
-            "    here (env unset; default.env placeholder is empty). The endpoint itself is\n"
-            "    reachable, so this is a credentials gap, not a compute limit. Qwen numbers\n"
-            "    below are a CONSERVATIVE DOCUMENTED ESTIMATE (see file header), not measured.\n"
+            "\n*** MEASUREMENT-UNAVAILABLE: the local Moondream VLM could not be "
+            "measured on this host. ***\n"
+            f"    Reason: {moondream_reason}\n"
+            "    The headline YOLOE-vs-local-VLM comparison is therefore unavailable;\n"
+            "    only the documented hosted-Qwen ESTIMATE (secondary, below) is shown.\n"
         )
 
     ref_model = build_reference_detector()
@@ -159,18 +201,17 @@ def main() -> int:
     for fname, img, q in cases:
         yolo_bbox, yolo_ms = time_yolo(detector, img, q)
 
-        if qwen_ok:
-            t0 = time.perf_counter()
-            _ = get_object_bbox_from_image(vl_model, img, q)
-            qwen_ms = (time.perf_counter() - t0) * 1000.0
+        if moondream_ok:
+            md_bbox, md_ms = time_moondream(vl_model, img, q)
+            speedup = md_ms / yolo_ms if yolo_ms > 0 else float("nan")
+            if yolo_bbox is not None and md_bbox is not None:
+                md_iou = iou(yolo_bbox, md_bbox)
+            else:
+                md_iou = None
         else:
-            qwen_ms = QWEN_EST_MS
+            md_bbox, md_ms, speedup, md_iou = None, None, None, None
 
-        speedup = qwen_ms / yolo_ms if yolo_ms > 0 else float("nan")
-
-        # Measured accuracy signal: agreement with an independent closed-vocab
-        # reference detector (YOLO11). Used because the VLM box is unavailable on
-        # this host; it is an inter-detector agreement, not human ground truth.
+        # Independent accuracy reference: agreement with closed-vocab YOLO11.
         ref_bbox = reference_box(ref_model, img, q)
         if yolo_bbox is not None and ref_bbox is not None:
             ref_iou = iou(yolo_bbox, ref_bbox)
@@ -180,8 +221,9 @@ def main() -> int:
 
         rows.append(
             {
-                "q": q, "img": fname, "yolo_ms": yolo_ms, "qwen_ms": qwen_ms,
-                "speedup": speedup, "yolo_bbox": yolo_bbox, "ref_bbox": ref_bbox,
+                "q": q, "img": fname, "yolo_ms": yolo_ms, "md_ms": md_ms,
+                "speedup": speedup, "md_iou": md_iou, "yolo_bbox": yolo_bbox,
+                "md_bbox": md_bbox, "ref_bbox": ref_bbox,
                 "ref_iou": ref_iou, "ref_cd": ref_cd,
             }
         )
@@ -189,45 +231,89 @@ def main() -> int:
     detector.stop()
     vl_model.stop()
 
-    # ---- speed table: YOLOE (measured) vs Qwen-VLM (estimate here) ----
-    print("\n" + "=" * 70)
-    print(f"SPEED — YOLOE (measured) vs Qwen-VLM ({'measured' if qwen_ok else 'ESTIMATED'})")
-    print("=" * 70)
-    print(f"{'query':<9} {'image':<11} {'yolo_ms':>8} {'qwen_ms':>12} {'speedup':>10}")
-    print("-" * 70)
-    for r in rows:
-        qcell = f"{r['qwen_ms']:7.0f}" if qwen_ok else f"~{r['qwen_ms']:.0f}(est)"
-        scell = f"{r['speedup']:.0f}x" + ("" if qwen_ok else "(est)")
-        print(f"{r['q']:<9} {r['img']:<11} {r['yolo_ms']:8.1f} {qcell:>12} {scell:>10}")
-    print("-" * 70)
+    # ---- HEADLINE: YOLOE (measured) vs local Moondream VLM (measured, CPU) ----
+    print("\n" + "=" * 78)
+    print("SPEED + AGREEMENT — YOLOE fast-path vs LOCAL Moondream VLM (both MEASURED, CPU)")
+    print("=" * 78)
+    if moondream_ok:
+        print(
+            f"{'query':<9} {'image':<11} {'yolo_ms':>8} {'moondream_ms':>13} "
+            f"{'speedup':>9} {'IoU(Y,MD)':>10}"
+        )
+        print("-" * 78)
+        for r in rows:
+            scell = f"{r['speedup']:.0f}x"
+            icell = f"{r['md_iou']:.2f}" if r["md_iou"] is not None else "N/A"
+            print(
+                f"{r['q']:<9} {r['img']:<11} {r['yolo_ms']:8.1f} {r['md_ms']:13.0f} "
+                f"{scell:>9} {icell:>10}"
+            )
+        print("-" * 78)
+    else:
+        print("UNAVAILABLE — Moondream failed to load/produce a box (see note above).")
 
-    # ---- accuracy table: YOLOE vs reference detector (measured) ----
-    print("\n" + "=" * 70)
+    # ---- accuracy vs an independent reference detector (measured) ----
+    print("\n" + "=" * 78)
     print("ACCURACY — YOLOE grounding vs reference detector YOLO11 (measured agreement)")
-    print("=" * 70)
+    print("=" * 78)
     print(f"{'query':<9} {'image':<11} {'IoU':>6} {'center_px':>11}")
-    print("-" * 70)
+    print("-" * 78)
     for r in rows:
         icell = f"{r['ref_iou']:.2f}" if r["ref_iou"] is not None else "N/A"
         ccell = f"{r['ref_cd']:.0f}" if r["ref_cd"] is not None else "N/A"
         print(f"{r['q']:<9} {r['img']:<11} {icell:>6} {ccell:>11}")
-    print("-" * 70)
+    print("-" * 78)
 
     med_yolo = statistics.median([r["yolo_ms"] for r in rows])
-    med_speedup = statistics.median([r["speedup"] for r in rows])
     ref_ious = [r["ref_iou"] for r in rows if r["ref_iou"] is not None]
     med_ref_iou = statistics.median(ref_ious) if ref_ious else None
-    qlabel = "measured" if qwen_ok else "ESTIMATE (not measured — no API key, see header)"
 
-    print("\n" + "=" * 70)
-    print(f"median YOLOE latency : {med_yolo:.1f} ms (measured, CPU, steady-state)")
-    print(f"median Qwen  latency : {QWEN_EST_MS if not qwen_ok else statistics.median([r['qwen_ms'] for r in rows]):.0f} ms [{qlabel}]")
-    print(f"median speedup       : {med_speedup:.0f}x" + ("" if qwen_ok else "  [estimate-based]"))
-    if med_ref_iou is not None:
-        print(f"median IoU vs YOLO11 : {med_ref_iou:.2f} (measured; inter-detector agreement, not the VLM)")
+    print("\n" + "=" * 78)
+    print(f"median YOLOE latency       : {med_yolo:.1f} ms (measured, CPU, steady-state)")
+    if moondream_ok:
+        md_list = [r["md_ms"] for r in rows if r["md_ms"] is not None]
+        sp_list = [r["speedup"] for r in rows if r["speedup"] is not None]
+        mdi_list = [r["md_iou"] for r in rows if r["md_iou"] is not None]
+        print(
+            f"median Moondream latency   : {statistics.median(md_list):.0f} ms "
+            "(MEASURED, local CPU VLM)"
+        )
+        print(
+            f"median speedup (YOLOE)     : {statistics.median(sp_list):.0f}x "
+            "(MEASURED, same CPU hardware)"
+        )
+        if mdi_list:
+            print(
+                f"median IoU(YOLOE,Moondream): {statistics.median(mdi_list):.2f} "
+                "(MEASURED VLM-vs-fast-path agreement)"
+            )
+        else:
+            print("median IoU(YOLOE,Moondream): N/A — no overlapping detections")
     else:
-        print("median IoU vs YOLO11 : N/A — no overlapping detections")
-    print("=" * 70)
+        print("median Moondream latency   : UNAVAILABLE (load/inference failed; not faked)")
+    if med_ref_iou is not None:
+        print(
+            f"median IoU vs YOLO11 ref    : {med_ref_iou:.2f} "
+            "(measured; independent inter-detector agreement)"
+        )
+    else:
+        print("median IoU vs YOLO11 ref    : N/A — no overlapping detections")
+    print("=" * 78)
+
+    # ---- SECONDARY: hosted Qwen is an estimate only (no API key on this host) ----
+    print("\n" + "-" * 78)
+    print("SECONDARY (NOT MEASURED) — hosted Qwen2.5-VL-72B, the production VLM fallback")
+    print("-" * 78)
+    qwen_speedup = QWEN_EST_MS / med_yolo if med_yolo else float("nan")
+    print(
+        f"    ESTIMATE only: ~{QWEN_EST_MS:.0f} ms/image (documented range ~1500-5000 ms).\n"
+        "    The hosted DashScope endpoint needs ALIBABA_API_KEY, absent here, so this\n"
+        "    number is NOT measured. NOTE: do NOT apply the 854x above to Qwen — that\n"
+        "    multiple is vs Moondream running on CPU (~41 s). Qwen is GPU-served and far\n"
+        f"    faster (~{QWEN_EST_MS:.0f} ms) despite being larger, so the production gap is\n"
+        f"    only ~{qwen_speedup:.0f}x (estimate). The 854x and the ~{qwen_speedup:.0f}x are\n"
+        "    different baselines (CPU local model vs GPU hosted model) — keep them separate.\n"
+    )
     return 0
 
 
