@@ -835,3 +835,28 @@ def test_real_yoloe_routing_on_bus_image() -> None:
     assert bbox == (1.0, 2.0, 3.0, 4.0)
 
     detector.stop()
+
+
+@pytest.mark.self_hosted
+def test_yoloe_visual_prompt_path_and_mode_switch() -> None:
+    """Visual (bbox) prompts run (previously crashed) and text<->bbox switches cleanly."""
+    from pathlib import Path
+
+    import ultralytics
+
+    img = Image.from_file(str(Path(ultralytics.__file__).parent / "assets" / "bus.jpg"))
+    detector = build_yoloe_grounding_detector(confidence=0.25)
+    assert detector is not None
+
+    ref = ground_candidates_with_yoloe(detector, img, "person")[0]
+
+    # Visual (bbox) prompt: previously crashed in ultralytics NMS.
+    detector.set_prompts(bboxes=np.array([list(ref)], dtype=np.float64))
+    assert len(detector.process_image(img).detections) > 0
+
+    # Switching back to text must work — the VP predictor used to corrupt the
+    # model's class names (dict -> list), breaking the next text set_prompts.
+    detector.set_prompts(text=["bus"])
+    assert len(detector.process_image(img).detections) >= 1
+
+    detector.stop()

@@ -139,35 +139,59 @@ class Yoloe2DDetector(Detector):
         Returns:
             ImageDetections2D containing all detected objects
         """
-        track_kwargs = {
-            "source": image.to_opencv(),
-            "device": self.device,
-            "conf": self.confidence,
-            "iou": self.iou_threshold,
-            "persist": True,
-            "verbose": False,
-        }
+        source = image.to_opencv()
 
         with self._lock:
             if self._visual_prompts is not None:
-                track_kwargs["visual_prompts"] = self._visual_prompts
+                # Visual (bbox) prompts need YOLOE's dedicated VP predictor. The
+                # standard track() path mishandles their output (NMS receives a
+                # tuple, not a tensor) and crashes; predict() with the seg VP
+                # predictor — matching the -seg checkpoint these models load — is
+                # the supported path.
+                from ultralytics.models.yolo.yoloe import YOLOEVPSegPredictor
 
-            try:
-                results = self.model.track(**track_kwargs)  # type: ignore[arg-type]
-            except Exception:
-                # A GPU/MPS backend op can be unsupported for a given input; fall
-                # back to CPU once (permanently for this detector) instead of
-                # failing. CPU is the baseline that always works.
-                if self.device == "cpu":
-                    raise
-                logger.warning(
-                    "YOLOE inference on '%s' failed; falling back to CPU.",
-                    self.device,
-                    exc_info=True,
-                )
-                self.device = "cpu"
-                track_kwargs["device"] = "cpu"
-                results = self.model.track(**track_kwargs)  # type: ignore[arg-type]
+                # The VP predictor rebinds the inner model's `names` to a list,
+                # which breaks a later text set_prompts() (it expects a dict).
+                # Save and restore it so the detector can switch text <-> bbox.
+                inner_model = self.model.model
+                saved_names = inner_model.names
+                try:
+                    results = self.model.predict(
+                        source=source,
+                        device=self.device,
+                        conf=self.confidence,
+                        iou=self.iou_threshold,
+                        verbose=False,
+                        visual_prompts=self._visual_prompts,
+                        predictor=YOLOEVPSegPredictor,
+                    )
+                finally:
+                    inner_model.names = saved_names
+            else:
+                track_kwargs = {
+                    "source": source,
+                    "device": self.device,
+                    "conf": self.confidence,
+                    "iou": self.iou_threshold,
+                    "persist": True,
+                    "verbose": False,
+                }
+                try:
+                    results = self.model.track(**track_kwargs)  # type: ignore[arg-type]
+                except Exception:
+                    # A GPU/MPS backend op can be unsupported for a given input;
+                    # fall back to CPU once (permanently for this detector)
+                    # instead of failing. CPU is the baseline that always works.
+                    if self.device == "cpu":
+                        raise
+                    logger.warning(
+                        "YOLOE inference on '%s' failed; falling back to CPU.",
+                        self.device,
+                        exc_info=True,
+                    )
+                    self.device = "cpu"
+                    track_kwargs["device"] = "cpu"
+                    results = self.model.track(**track_kwargs)  # type: ignore[arg-type]
 
         detections = ImageDetections2D.from_ultralytics_result(image, results)
         return self._apply_filters(image, detections)
