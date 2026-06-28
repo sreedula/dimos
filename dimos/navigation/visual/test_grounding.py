@@ -26,6 +26,7 @@ import pytest
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.navigation.visual import grounding as grounding_mod
 from dimos.navigation.visual.grounding import (
+    _clamp_box_to_frame,
     _object_class,
     box_iou,
     build_yoloe_grounding_detector,
@@ -1473,3 +1474,31 @@ def test_get_object_bboxes_no_attribute_returns_all(image: Image) -> None:
     )
     boxes = get_object_bboxes(_RaisingVlModel(), image, "all the people", detector=detector)
     assert boxes == [(0.0, 0.0, 10.0, 10.0), (20.0, 0.0, 30.0, 10.0)]
+
+
+@pytest.mark.parametrize(
+    "box,expected",
+    [
+        ((10, 10, 20, 30), (10, 10, 20, 30)),  # normal, unchanged
+        ((-100, -100, 9999, 9999), (0, 0, 100, 100)),  # clamped to the frame
+    ],
+)
+def test_clamp_box_to_frame_exact(box, expected) -> None:
+    assert _clamp_box_to_frame(*box, 100, 100) == expected
+
+
+@pytest.mark.parametrize(
+    "box",
+    [
+        (50, 50, 50, 50),  # zero-area
+        (80, 80, 10, 10),  # inverted
+        (99, 99, 200, 200),  # at the edge, overflowing
+        (0.5, 0.5, 1.5, 1.5),  # sub-pixel
+    ],
+)
+def test_clamp_box_to_frame_guarantees_nonempty_in_bounds(box) -> None:
+    # Degenerate boxes must yield a >=1px crop region inside the frame (never an
+    # empty crop, which would crash CLIP preprocessing).
+    ix1, iy1, ix2, iy2 = _clamp_box_to_frame(*box, 100, 100)
+    assert 0 <= ix1 < ix2 <= 100
+    assert 0 <= iy1 < iy2 <= 100

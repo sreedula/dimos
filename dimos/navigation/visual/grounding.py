@@ -286,6 +286,22 @@ def _load_clip() -> tuple[Any, Callable[..., Any]]:
     return _clip_model, _clip_preprocess
 
 
+def _clamp_box_to_frame(
+    x1: float, y1: float, x2: float, y2: float, width: int, height: int
+) -> tuple[int, int, int, int]:
+    """Clamp a box to the frame with a guaranteed >=1px extent, for safe cropping.
+
+    Degenerate boxes (zero-area, inverted, out-of-bounds, sub-pixel) would yield
+    an empty crop and crash PIL; this returns integer ``(ix1, iy1, ix2, iy2)``
+    with ``ix2 > ix1`` and ``iy2 > iy1``, clamped inside the frame.
+    """
+    ix1 = max(0, min(round(x1), width - 1))
+    iy1 = max(0, min(round(y1), height - 1))
+    ix2 = max(ix1 + 1, min(round(x2), width))
+    iy2 = max(iy1 + 1, min(round(y2), height))
+    return ix1, iy1, ix2, iy2
+
+
 def clip_scores(image, candidates: list[BBox], phrase: str) -> list[float]:
     """CLIP cosine similarity of each candidate's crop to `phrase`.
 
@@ -338,10 +354,7 @@ def clip_scores(image, candidates: list[BBox], phrase: str) -> list[float]:
         # Clamp to the frame and guard degenerate/empty boxes: a zero-area crop
         # would make PIL choke, so such a box falls back to the whole frame (it
         # simply scores uninformatively rather than crashing the batch).
-        ix1 = max(0, min(round(x1), width - 1))
-        iy1 = max(0, min(round(y1), height - 1))
-        ix2 = max(ix1 + 1, min(round(x2), width))
-        iy2 = max(iy1 + 1, min(round(y2), height))
+        ix1, iy1, ix2, iy2 = _clamp_box_to_frame(x1, y1, x2, y2, width, height)
         crop = rgb[iy1:iy2, ix1:ix2]
         if crop.size == 0:
             crop = rgb
