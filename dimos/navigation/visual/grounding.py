@@ -838,6 +838,9 @@ def _object_class(phrase: str) -> str:
     a trailing prepositional phrase, so the class is the noun before it, not the
     last word (which would be the color/accessory and ground nothing).
     """
+    words = phrase.split()
+    if not words:
+        return phrase
     lowered = phrase.lower()
     cut = len(phrase)
     for prep in _ATTRIBUTE_PREPS:
@@ -845,7 +848,7 @@ def _object_class(phrase: str) -> str:
         if 0 < idx < cut:
             cut = idx
     before = phrase[:cut].split()
-    return singularize(before[-1]) if before else singularize(phrase.split()[-1])
+    return singularize(before[-1] if before else words[-1])
 
 
 def _has_attribute_preposition(phrase: str) -> bool:

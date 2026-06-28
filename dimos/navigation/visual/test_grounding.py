@@ -1351,6 +1351,8 @@ def test_resolve_grounding_integration_realistic_queries(image: Image) -> None:
         ("woman holding a cup", "woman"),
         ("person in a dark jacket", "person"),
         ("large blue chair", "chair"),
+        ("", ""),  # empty must not crash (no IndexError)
+        ("   ", "   "),  # whitespace-only must not crash
     ],
 )
 def test_object_class(phrase: str, expected: str) -> None:
