@@ -953,3 +953,11 @@ def test_resolve_grounding_no_retry_when_found_at_default(image: Image) -> None:
     detector = _ConfFakeDetector(present_below=0.6)
     assert resolve_grounding(detector, image, "bottle") == (1.0, 2.0, 3.0, 4.0)
     assert detector.confidence == 0.6
+
+
+def test_get_object_bboxes_retries_at_lower_confidence(image: Image) -> None:
+    # Multi-object path also does the cheap recall retry before the VLM.
+    detector = _ConfFakeDetector(present_below=0.3)
+    boxes = get_object_bboxes(_RaisingVlModel(), image, "all the bottles", detector=detector)
+    assert boxes == [(1.0, 2.0, 3.0, 4.0)]
+    assert detector.confidence == 0.6  # restored

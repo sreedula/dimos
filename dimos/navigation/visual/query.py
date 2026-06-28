@@ -21,6 +21,7 @@ from dimos.navigation.visual.grounding import (
     ground_candidates_with_yoloe,
     parse_grounding_query,
     resolve_grounding,
+    retry_at_lower_confidence,
     singularize,
 )
 from dimos.utils.generic import extract_json_from_llm_response
@@ -120,9 +121,12 @@ def get_object_bboxes(
             if words:
                 words[-1] = singularize(words[-1])
                 object_phrase = " ".join(words)
-            boxes = ground_candidates_with_yoloe(
-                detector, image, object_phrase or object_description
-            )
+            phrase = object_phrase or object_description
+            boxes = ground_candidates_with_yoloe(detector, image, phrase)
+            if not boxes:
+                # Cheap recall retry at a lower confidence before the VLM, same
+                # as the single-object path.
+                boxes = retry_at_lower_confidence(detector, image, phrase)
         except Exception:
             logger.warning(
                 "YOLOE multi-object grounding failed; falling back to the VLM.",

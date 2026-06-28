@@ -687,7 +687,7 @@ def _is_attributive(object_phrase: str) -> bool:
 _RECALL_RETRY_CONFIDENCE = 0.25
 
 
-def _retry_at_lower_confidence(detector, image, description: str) -> list[BBox]:
+def retry_at_lower_confidence(detector, image, description: str) -> list[BBox]:
     """Re-ground `description` once at a lower confidence; ``[]`` if not worthwhile.
 
     The detector exposes a ``confidence`` attribute that ``process_image`` reads.
@@ -753,7 +753,7 @@ def resolve_grounding(
         # Last cheap try before the caller falls to the slow VLM: re-run YOLOE at
         # a lower confidence to catch a faint/small object it skipped. Only fires
         # on a miss, so the precision-oriented default is unchanged for hits.
-        candidates = _retry_at_lower_confidence(detector, image, object_phrase)
+        candidates = retry_at_lower_confidence(detector, image, object_phrase)
     if not candidates:
         return None
 
