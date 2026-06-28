@@ -41,7 +41,7 @@ prev = get_object_bbox(vl_model, image, "person", detector=detector)
 prev = get_object_bbox(vl_model, next_image, "person", detector=detector, prev_box=prev)
 ```
 
-- **Spatial** — `leftmost / rightmost / topmost / bottommost / largest (biggest, nearest) / smallest / center`, resolved geometrically.
+- **Spatial** — `leftmost / rightmost / topmost / bottommost / largest (biggest, nearest) / smallest / center`, plus **ordinals** like "the second chair from the left" or "the last person from the right", all resolved geometrically.
 - **Appearance** — a multi-word phrase ("red mug") re-ranks same-class candidates by CLIP similarity; degrades to the top box if CLIP is unavailable.
 - **Tracking** — `prev_box` selects the candidate most consistent with the last box (highest IoU, else nearest center).
 

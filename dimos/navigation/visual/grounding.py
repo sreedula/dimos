@@ -172,6 +172,20 @@ def select_by_position(candidates: list[BBox], qualifier: str) -> BBox | None:
         return abs(b[2] - b[0]) * abs(b[3] - b[1])
 
     key = qualifier.strip().lower()
+
+    # Ordinal qualifiers like "from-left:2" (second from the left) or
+    # "from-bottom:last": order the candidates along the axis and index in.
+    ordinal = re.fullmatch(r"from-(left|right|top|bottom):(\d+|last)", key)
+    if ordinal:
+        direction, n = ordinal.group(1), ordinal.group(2)
+        axis = _cx if direction in ("left", "right") else _cy
+        reverse = direction in ("right", "bottom")
+        ordered = sorted(candidates, key=axis, reverse=reverse)
+        if n == "last":
+            return ordered[-1]
+        index = int(n) - 1
+        return ordered[index] if 0 <= index < len(ordered) else None
+
     if key == "leftmost":
         return min(candidates, key=_cx)
     if key == "rightmost":
@@ -518,6 +532,29 @@ _SPATIAL_PATTERNS: list[tuple[tuple[str, ...], str]] = [
     (("centermost", "center", "centre", "central", "middle", "in the middle"), "center"),
 ]
 
+# Ordinal words → 1-based rank ("last" handled specially by select_by_position).
+_ORDINALS: dict[str, str] = {
+    "first": "1",
+    "1st": "1",
+    "second": "2",
+    "2nd": "2",
+    "third": "3",
+    "3rd": "3",
+    "fourth": "4",
+    "4th": "4",
+    "fifth": "5",
+    "5th": "5",
+    "sixth": "6",
+    "6th": "6",
+    "last": "last",
+}
+# "[the] <ordinal> <noun> from the <left|right|top|bottom>" — the noun sits
+# between the ordinal and the direction (e.g. "the second chair from the left").
+_ORDINAL_RE = re.compile(
+    r"\b(?:the\s+)?(" + "|".join(_ORDINALS) + r")\s+(.+?)\s+from\s+the\s+(left|right|top|bottom)\b",
+    re.IGNORECASE,
+)
+
 
 def parse_grounding_query(description: str) -> tuple[str, str | None]:
     """Split a query into (object phrase, spatial qualifier or None).
@@ -535,6 +572,16 @@ def parse_grounding_query(description: str) -> tuple[str, str | None]:
         selectors understood by :func:`select_by_position`, or ``None``.
     """
     text = " ".join(description.strip().split())
+
+    # Ordinals first ("the second chair from the left"), so the bare-direction
+    # patterns below don't capture the "left" inside them.
+    ordinal_match = _ORDINAL_RE.search(text)
+    if ordinal_match:
+        rank = _ORDINALS[ordinal_match.group(1).lower()]
+        noun = re.sub(r"^\s*(the|a|an)\s+", "", ordinal_match.group(2), flags=re.IGNORECASE)
+        noun = " ".join(noun.split()).strip(" ,.")
+        return (noun or text), f"from-{ordinal_match.group(3).lower()}:{rank}"
+
     for phrases, qualifier in _SPATIAL_PATTERNS:
         for phrase in phrases:
             pattern = re.compile(rf"\b{re.escape(phrase)}\b", re.IGNORECASE)

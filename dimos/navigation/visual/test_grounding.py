@@ -627,3 +627,47 @@ def test_build_yoloe_grounding_detector_forwards_confidence(monkeypatch) -> None
     assert det is not None
     assert captured["confidence"] == 0.25  # recall knob threaded through
     assert captured["max_area_ratio"] is None
+
+
+# --- Ordinal spatial selectors ("second from the left") ---
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("the second chair from the left", ("chair", "from-left:2")),
+        ("third person from the right", ("person", "from-right:3")),
+        ("last car from the left", ("car", "from-left:last")),
+        ("the 2nd dog from the top", ("dog", "from-top:2")),
+    ],
+)
+def test_parse_grounding_query_ordinals(query: str, expected: tuple) -> None:
+    assert parse_grounding_query(query) == expected
+
+
+def test_select_by_position_ordinal_index() -> None:
+    # Three boxes at x-centers 10, 20, 30 (given out of order to prove sorting).
+    boxes = [(25.0, 0.0, 35.0, 10.0), (5.0, 0.0, 15.0, 10.0), (15.0, 0.0, 25.0, 10.0)]
+    assert select_by_position(boxes, "from-left:1") == (5.0, 0.0, 15.0, 10.0)
+    assert select_by_position(boxes, "from-left:2") == (15.0, 0.0, 25.0, 10.0)
+    assert select_by_position(boxes, "from-right:1") == (25.0, 0.0, 35.0, 10.0)
+    assert select_by_position(boxes, "from-left:last") == (25.0, 0.0, 35.0, 10.0)
+    assert select_by_position(boxes, "from-left:5") is None  # out of range
+
+
+def test_resolve_grounding_ordinal_end_to_end(image: Image) -> None:
+    detector = _FakeDetector(
+        {
+            "person": [
+                _FakeDetection("person", 0.9, (0, 0, 20, 20)),  # left
+                _FakeDetection("person", 0.8, (100, 0, 120, 20)),  # right
+                _FakeDetection("person", 0.7, (50, 0, 70, 20)),  # middle
+            ]
+        }
+    )
+    assert resolve_grounding(detector, image, "the second person from the left") == (
+        50.0,
+        0.0,
+        70.0,
+        20.0,
+    )
