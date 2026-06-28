@@ -669,25 +669,28 @@ def strip_quantifiers(phrase: str) -> str:
 
 
 # Ordinal words → 1-based rank ("last" handled specially by select_by_position).
+# Digit ordinals (1st, 7th, 21st, ...) are matched generically by the regex and
+# parsed in parse_grounding_query, so they need not be enumerated here.
 _ORDINALS: dict[str, str] = {
     "first": "1",
-    "1st": "1",
     "second": "2",
-    "2nd": "2",
     "third": "3",
-    "3rd": "3",
     "fourth": "4",
-    "4th": "4",
     "fifth": "5",
-    "5th": "5",
     "sixth": "6",
-    "6th": "6",
+    "seventh": "7",
+    "eighth": "8",
+    "ninth": "9",
+    "tenth": "10",
     "last": "last",
 }
 # "[the] <ordinal> <noun> from the <left|right|top|bottom>" — the noun sits
 # between the ordinal and the direction (e.g. "the second chair from the left").
+# The ordinal is a word form above or any digit ordinal ("7th", "10th").
 _ORDINAL_RE = re.compile(
-    r"\b(?:the\s+)?(" + "|".join(_ORDINALS) + r")\s+(.+?)\s+from\s+the\s+(left|right|top|bottom)\b",
+    r"\b(?:the\s+)?(\d+(?:st|nd|rd|th)|"
+    + "|".join(_ORDINALS)
+    + r")\s+(.+?)\s+from\s+the\s+(left|right|top|bottom)\b",
     re.IGNORECASE,
 )
 
@@ -733,7 +736,9 @@ def parse_grounding_query(description: str) -> tuple[str, str | None]:
     # patterns below don't capture the "left" inside them.
     ordinal_match = _ORDINAL_RE.search(text)
     if ordinal_match:
-        rank = _ORDINALS[ordinal_match.group(1).lower()]
+        token = ordinal_match.group(1).lower()
+        # Word form ("seventh") via the table, else a digit ordinal ("7th") -> "7".
+        rank = _ORDINALS.get(token) or re.sub(r"(st|nd|rd|th)$", "", token)
         noun = re.sub(r"^\s*(the|a|an)\s+", "", ordinal_match.group(2), flags=re.IGNORECASE)
         noun = " ".join(noun.split()).strip(" ,.")
         return (noun or text), f"from-{ordinal_match.group(3).lower()}:{rank}"

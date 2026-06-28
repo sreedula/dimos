@@ -1282,3 +1282,19 @@ def test_get_object_bboxes_strips_quantifier_to_class(image: Image) -> None:
 )
 def test_parse_grounding_query_strips_preamble_and_imperative(query: str, expected: tuple) -> None:
     assert parse_grounding_query(query) == expected
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("the seventh chair from the left", ("chair", "from-left:7")),
+        ("the tenth car from the right", ("car", "from-right:10")),
+        ("the 7th person from the right", ("person", "from-right:7")),
+        ("the 10th car from the left", ("car", "from-left:10")),
+        ("the 21st chair from the left", ("chair", "from-left:21")),
+    ],
+)
+def test_parse_grounding_query_ordinals_beyond_six(query: str, expected: tuple) -> None:
+    # Ordinals past 6 (words to ten) and any digit ordinal ("7th", "21st") parse,
+    # rather than mis-firing the bare-direction path on a garbage object phrase.
+    assert parse_grounding_query(query) == expected
