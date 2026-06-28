@@ -267,7 +267,9 @@ class PersonFollowSkillContainer(Module):
         # The tool-stream was opened in the parent `follow_person` skill;
         # leaving `self._thread` set is the signal the parent uses to keep it
         # open for the background loop instead of closing on early return.
-        self._thread = Thread(target=self._follow_loop, args=(tracker, query), daemon=True)
+        self._thread = Thread(
+            target=self._follow_loop, args=(tracker, query, initial_bbox), daemon=True
+        )
         self._thread.start()
 
         message = (
@@ -276,7 +278,42 @@ class PersonFollowSkillContainer(Module):
         )
         return message
 
-    def _follow_loop(self, tracker: "EdgeTAMProcessor", query: str) -> None:
+    def _reacquire(
+        self,
+        tracker: "EdgeTAMProcessor",
+        query: str,
+        image: Image,
+        prev_box: BBox | None,
+    ) -> BBox | None:
+        """Re-ground `query` after EdgeTAM lost it and re-init the tracker.
+
+        Uses the last known box as a tracking hint so the YOLOE fast path locks
+        back onto the SAME instance (the nearest candidate) rather than a
+        different person. Returns the recovered box, or ``None`` if grounding or
+        re-segmentation failed (in which case the caller counts toward giving up).
+        """
+        try:
+            bbox = get_object_bbox(
+                self._vl_model,
+                image,
+                query,
+                detector=self._get_grounding_detector(),
+                prev_box=prev_box,
+            )
+        except Exception:
+            logger.warning("Re-acquisition grounding failed.", exc_info=True)
+            return None
+        if bbox is None:
+            return None
+
+        box = np.array(bbox, dtype=np.float32)
+        detections = tracker.init_track(image=image, box=box, obj_id=1)
+        if len(detections) == 0:
+            return None
+        logger.info(f"Re-acquired '{query}'; tracker re-initialized.")
+        return bbox
+
+    def _follow_loop(self, tracker: "EdgeTAMProcessor", query: str, last_bbox: BBox) -> None:
         lost_count = 0
         period = 1.0 / self._frequency
         next_time = time.monotonic()
@@ -293,13 +330,22 @@ class PersonFollowSkillContainer(Module):
             if len(detections) == 0:
                 self.cmd_vel.publish(Twist.zero())
 
-                lost_count += 1
-                if lost_count > self._max_lost_frames:
-                    self._send_stop_reason(query, "lost track of the person")
-                    return
+                # Before giving up, try to re-ground the SAME person with YOLOE,
+                # hinting with the last known box so we re-lock the same instance
+                # instead of a different person. Recovers from brief occlusions.
+                reacquired = self._reacquire(tracker, query, latest_image, last_bbox)
+                if reacquired is not None:
+                    last_bbox = reacquired
+                    lost_count = 0
+                else:
+                    lost_count += 1
+                    if lost_count > self._max_lost_frames:
+                        self._send_stop_reason(query, "lost track of the person")
+                        return
             else:
                 lost_count = 0
                 best_detection = max(detections.detections, key=lambda d: d.bbox_2d_volume())
+                last_bbox = tuple(float(v) for v in best_detection.bbox)
 
                 if self.config.use_3d_navigation:
                     with self._lock:

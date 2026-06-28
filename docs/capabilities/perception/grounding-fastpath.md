@@ -45,7 +45,7 @@ prev = get_object_bbox(vl_model, next_image, "person", detector=detector, prev_b
 - **Appearance** — a multi-word phrase ("red mug") re-ranks same-class candidates by CLIP similarity; degrades to the top box if CLIP is unavailable.
 - **Tracking** — `prev_box` selects the candidate most consistent with the last box (highest IoU, else nearest center).
 
-The `navigation` skill feeds its last goal box back as `prev_box` automatically, so re-grounding the same goal across frames stays locked on one instance.
+The `navigation` skill feeds its last goal box back as `prev_box` automatically, so re-grounding the same goal across frames stays locked on one instance. The `person_follow` skill uses the same hint to **recover from tracking loss**: when EdgeTAM loses the target it re-grounds with YOLOE (hinted by the last box) and re-initializes the tracker — re-locking the *same* person after a brief occlusion instead of giving up.
 
 The underlying primitives live in `dimos.navigation.visual.grounding` (`resolve_grounding`, `ground_candidates_with_yoloe`, `select_by_position`, `select_by_clip`, `select_nearest`). The detector memoizes the prompt, so grounding the same object across consecutive frames skips the text re-encode and pays only the detection cost.
 
