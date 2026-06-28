@@ -579,6 +579,11 @@ def test_clip_text_embedding_is_cached() -> None:
         ("central person", ("person", "center")),
         ("red mug", ("red mug", None)),
         ("person", ("person", None)),
+        # Leading articles are stripped even with no spatial language — they
+        # wreck YOLOE recall ("the person" finds 0 boxes, "person" finds 5).
+        ("the person", ("person", None)),
+        ("a bus", ("bus", None)),
+        ("the red mug", ("red mug", None)),
     ],
 )
 def test_parse_grounding_query(query: str, expected: tuple) -> None:

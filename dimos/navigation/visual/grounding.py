@@ -660,7 +660,11 @@ def parse_grounding_query(description: str) -> tuple[str, str | None]:
                 stripped = re.sub(r"^\s*(the|a|an)\s+", " ", stripped, flags=re.IGNORECASE)
                 stripped = " ".join(stripped.split()).strip(" ,.")
                 return (stripped or text), qualifier
-    return text, None
+
+    # No spatial language: still strip a leading article. YOLOE's text encoder is
+    # sensitive to it — e.g. "person" finds 5 boxes but "the person" finds 0.
+    plain = re.sub(r"^\s*(the|a|an)\s+", "", text, flags=re.IGNORECASE).strip()
+    return (plain or text), None
 
 
 def _is_attributive(object_phrase: str) -> bool:
