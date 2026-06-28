@@ -257,3 +257,7 @@ class Yoloe2DDetector(Detector):
                         if hasattr(gmc, "executor") and gmc.executor is not None:
                             gmc.executor.shutdown(wait=True)
             self.model.predictor = None
+        # Release cached text-prompt embeddings (tensors, possibly on GPU) so they
+        # don't outlive the detector or accumulate across a long-running session.
+        if hasattr(self, "_text_pe_cache"):
+            self._text_pe_cache.clear()
