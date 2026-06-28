@@ -34,8 +34,10 @@ bbox = get_object_bbox(vl_model, image, "person", detector=detector)
 get_object_bbox(vl_model, image, "find the leftmost person", detector=detector)  # spatial + imperative
 get_object_bbox(vl_model, image, "the second chair from the left", detector=detector)  # ordinal
 get_object_bbox(vl_model, image, "the red mug",                detector=detector)  # appearance (CLIP)
+get_object_bbox(vl_model, image, "the person in a red shirt",  detector=detector)  # prepositional attribute
 get_object_bbox(vl_model, image, "the cup next to the laptop", detector=detector)  # proximity relation
 get_object_bbox(vl_model, image, "the bottle to the left of the laptop", detector=detector)  # direction
+get_object_bbox(vl_model, image, "the leftmost person in red", detector=detector)  # attribute + spatial
 
 # Tracking: feed the previous frame's box so the same instance stays locked,
 # instead of jumping to a higher-confidence different instance.
@@ -46,13 +48,14 @@ prev = get_object_bbox(vl_model, next_image, "person", detector=detector, prev_b
 boxes = get_object_bboxes(vl_model, image, "person", detector=detector)  # e.g. 5 boxes
 ```
 
-`get_object_bboxes` returns *all* matching boxes (highest-confidence first) for an in-vocabulary class; for a query YOLOE can't ground it falls back to the VLM's single box. It strips quantifiers ("all the", "every") and **singularizes** the class, so natural plurals work — `"all the people"` grounds the `person` class (on `bus.jpg`, → 5 boxes, no VLM call).
+`get_object_bboxes` returns *all* matching boxes (highest-confidence first) for an in-vocabulary class; for a query YOLOE can't ground it falls back to the VLM's single box. It strips quantifiers and numbers ("all the", "every", "both", "the three", "several") and **singularizes** the class, so natural plurals work — `"all the people"` grounds the `person` class (on `bus.jpg`, → 5 boxes, no VLM call). With a prepositional attribute it also filters: `"all the people in red"` grounds `person`, then keeps the red-matching instances.
 
-- **Spatial** — `leftmost / rightmost / topmost / bottommost / largest (biggest, nearest) / smallest / center`, plus **ordinals** like "the second chair from the left" or "the last person from the right", all resolved geometrically.
-- **Appearance** — a multi-word phrase ("red mug") re-ranks same-class candidates by CLIP similarity; degrades to the top box if CLIP is unavailable.
-- **Relational** — "the cup **next to** the laptop" (proximity: `near`/`beside`/`closest to`) or "the bottle **to the left of** the laptop" (direction: `left`/`right`/`above`/`below`) grounds both objects and returns the instance with that spatial relation to the reference.
+- **Spatial** — `leftmost / rightmost / topmost / bottommost / largest (biggest, nearest) / smallest / center` (incl. "in the middle"), plus **ordinals** — "the second chair from the left", "the 7th car from the right", "the last person" — words to ten and any digit ordinal, all resolved geometrically.
+- **Appearance** — re-ranks same-class candidates by CLIP similarity, for both adjective attributes ("the **red** mug") and prepositional ones ("the person **in red**", "the man **wearing a hat**" — the class is the noun before the preposition); degrades to the top box if CLIP is unavailable.
+- **Relational** — "the cup **next to** the laptop" (proximity: `near`/`beside`/`closest to`) or "the bottle **to the left of** the laptop" (direction: `left`/`right`/`above`/`below`) grounds both objects and returns the instance with that spatial relation to the reference (matching against *any* reference instance for proximity).
+- **Compositions** — these combine: "the **leftmost** person **in red**" (attribute → then spatial) and "the person **in red** next to the **bus**" (attribute → then relation). Attribute narrowing is gated on a preposition so two-word class names ("wine glass", "stop sign") aren't mistaken for attributes.
 - **Tracking** — `prev_box` selects the candidate most consistent with the last box (highest IoU, else nearest center).
-- **Phrasing robustness** — leading articles ("**the** person") and imperatives ("**find the** chair") are stripped (they otherwise wreck YOLOE's text-encoder recall — "person" finds 5 boxes, "the person" finds 0), plurals are singularized, and grayscale frames are promoted to BGR rather than crashing.
+- **Phrasing robustness** — leading articles ("**the** person"), imperatives ("**find the** chair"), and polite preambles ("**could you** find the…") are stripped (they otherwise wreck YOLOE's text-encoder recall — "person" finds 5 boxes, "the person" finds 0); trailing punctuation ("the person**.**") is removed; plurals (incl. `-ves`/`-oes`: knives→knife) are singularized; and grayscale frames are promoted to BGR rather than crashing.
 - **Recall retry** — when nothing is found at the detector's confidence, one cheap retry at a lower threshold runs before the caller falls to the slow VLM, catching faint/small objects on the fast path. Tunable: `build_yoloe_grounding_detector(confidence=..., iou_threshold=...)`.
 - **Performance** — text-prompt embeddings (the ~135 ms YOLOE encoder pass) and CLIP text embeddings are cached per phrase, so repeated or alternating grounding — relational queries, multi-object, per-frame re-grounding — re-pays only the ~50 ms detection, not the encode.
 
