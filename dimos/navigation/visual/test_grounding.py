@@ -137,7 +137,7 @@ class _ModeFakeDetector:
         self._visual_prompts = None
         self._prompt: str | None = None
 
-    def set_prompts(self, text: list[str] | None = None, bboxes=None) -> None:  # noqa: ANN001
+    def set_prompts(self, text: list[str] | None = None, bboxes=None) -> None:
         if bboxes is not None:
             self._visual_prompts = {"bboxes": bboxes}
             self._prompt = None
