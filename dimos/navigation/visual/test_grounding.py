@@ -24,7 +24,13 @@ import numpy as np
 import pytest
 
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
-from dimos.navigation.visual.grounding import build_yoloe_grounding_detector, ground_with_yoloe
+from dimos.navigation.visual.grounding import (
+    build_yoloe_grounding_detector,
+    ground_candidates_with_yoloe,
+    ground_with_position,
+    ground_with_yoloe,
+    select_by_position,
+)
 from dimos.navigation.visual.query import get_object_bbox, get_object_bbox_from_image
 
 
@@ -178,3 +184,113 @@ def test_build_yoloe_grounding_detector_returns_none_on_failure(monkeypatch) -> 
 
     monkeypatch.setattr(yoloe_mod, "Yoloe2DDetector", _boom)
     assert build_yoloe_grounding_detector() is None
+
+
+def test_ground_candidates_returns_all_boxes_sorted_by_confidence(image: Image) -> None:
+    detector = _FakeDetector(
+        {
+            "chair": [
+                _FakeDetection("chair", 0.61, (0, 0, 1, 1)),
+                _FakeDetection("chair", 0.95, (5, 6, 7, 8)),
+                _FakeDetection("chair", 0.80, (2, 2, 3, 3)),
+            ]
+        }
+    )
+
+    candidates = ground_candidates_with_yoloe(detector, image, "chair")
+
+    # Highest confidence first, every detection present, all float 4-tuples.
+    assert candidates == [(5.0, 6.0, 7.0, 8.0), (2.0, 2.0, 3.0, 3.0), (0.0, 0.0, 1.0, 1.0)]
+    assert all(isinstance(b, tuple) and len(b) == 4 for b in candidates)
+    assert all(isinstance(v, float) for b in candidates for v in b)
+
+
+def test_ground_candidates_returns_empty_list_for_absent_object(image: Image) -> None:
+    detector = _FakeDetector({"chair": [_FakeDetection("chair", 0.9, (1, 2, 3, 4))]})
+
+    assert ground_candidates_with_yoloe(detector, image, "banana") == []
+
+
+def test_select_by_position_returns_none_on_empty() -> None:
+    assert select_by_position([], "leftmost") is None
+
+
+def test_select_by_position_leftmost() -> None:
+    boxes = [(50.0, 0.0, 60.0, 10.0), (0.0, 0.0, 10.0, 10.0), (20.0, 0.0, 30.0, 10.0)]
+    assert select_by_position(boxes, "leftmost") == (0.0, 0.0, 10.0, 10.0)
+
+
+def test_select_by_position_rightmost() -> None:
+    boxes = [(50.0, 0.0, 60.0, 10.0), (0.0, 0.0, 10.0, 10.0), (20.0, 0.0, 30.0, 10.0)]
+    assert select_by_position(boxes, "rightmost") == (50.0, 0.0, 60.0, 10.0)
+
+
+def test_select_by_position_topmost() -> None:
+    boxes = [(0.0, 50.0, 10.0, 60.0), (0.0, 0.0, 10.0, 10.0), (0.0, 20.0, 10.0, 30.0)]
+    assert select_by_position(boxes, "topmost") == (0.0, 0.0, 10.0, 10.0)
+
+
+def test_select_by_position_bottommost() -> None:
+    boxes = [(0.0, 50.0, 10.0, 60.0), (0.0, 0.0, 10.0, 10.0), (0.0, 20.0, 10.0, 30.0)]
+    assert select_by_position(boxes, "bottommost") == (0.0, 50.0, 10.0, 60.0)
+
+
+def test_select_by_position_largest() -> None:
+    boxes = [(0.0, 0.0, 2.0, 2.0), (0.0, 0.0, 10.0, 10.0), (0.0, 0.0, 5.0, 5.0)]
+    assert select_by_position(boxes, "largest") == (0.0, 0.0, 10.0, 10.0)
+
+
+def test_select_by_position_smallest() -> None:
+    boxes = [(0.0, 0.0, 2.0, 2.0), (0.0, 0.0, 10.0, 10.0), (0.0, 0.0, 5.0, 5.0)]
+    assert select_by_position(boxes, "smallest") == (0.0, 0.0, 2.0, 2.0)
+
+
+def test_select_by_position_center() -> None:
+    # Centers at x=5, x=15, x=100; mean center x ~= 40, so the x=15 box (center
+    # at 15) is closest to the centroid of all candidate centers.
+    boxes = [(0.0, 0.0, 10.0, 10.0), (10.0, 0.0, 20.0, 10.0), (95.0, 0.0, 105.0, 10.0)]
+    assert select_by_position(boxes, "center") == (10.0, 0.0, 20.0, 10.0)
+
+
+def test_select_by_position_is_case_insensitive() -> None:
+    boxes = [(50.0, 0.0, 60.0, 10.0), (0.0, 0.0, 10.0, 10.0)]
+    assert select_by_position(boxes, "LeftMost") == (0.0, 0.0, 10.0, 10.0)
+
+
+def test_ground_with_position_with_qualifier_resolves_geometrically(image: Image) -> None:
+    detector = _FakeDetector(
+        {
+            "chair": [
+                _FakeDetection("chair", 0.95, (50, 0, 60, 10)),  # top confidence, rightmost
+                _FakeDetection("chair", 0.80, (0, 0, 10, 10)),  # leftmost
+            ]
+        }
+    )
+
+    # The qualifier overrides confidence: leftmost wins despite lower confidence.
+    assert ground_with_position(detector, image, "chair", qualifier="leftmost") == (
+        0.0,
+        0.0,
+        10.0,
+        10.0,
+    )
+
+
+def test_ground_with_position_without_qualifier_returns_top_confidence(image: Image) -> None:
+    detector = _FakeDetector(
+        {
+            "chair": [
+                _FakeDetection("chair", 0.80, (0, 0, 10, 10)),
+                _FakeDetection("chair", 0.95, (50, 0, 60, 10)),
+            ]
+        }
+    )
+
+    assert ground_with_position(detector, image, "chair") == (50.0, 0.0, 60.0, 10.0)
+
+
+def test_ground_with_position_returns_none_for_absent_object(image: Image) -> None:
+    detector = _FakeDetector({"chair": [_FakeDetection("chair", 0.9, (1, 2, 3, 4))]})
+
+    assert ground_with_position(detector, image, "banana", qualifier="leftmost") is None
+    assert ground_with_position(detector, image, "banana") is None

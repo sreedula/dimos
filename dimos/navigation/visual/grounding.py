@@ -62,6 +62,41 @@ def build_yoloe_grounding_detector() -> Any | None:
         return None
 
 
+def ground_candidates_with_yoloe(detector, image, description: str) -> list[BBox]:
+    """Return all YOLOE match bboxes for `description`, highest-confidence first.
+
+    The multi-candidate counterpart to :func:`ground_with_yoloe`: where that
+    returns only the single best box, this returns every detection so callers can
+    disambiguate among them (e.g. "the leftmost chair") via
+    :func:`select_by_position`.
+
+    Args:
+        detector: A constructed open-vocab detector (e.g. ``Yoloe2DDetector`` in
+            ``YoloePromptMode.PROMPT``) exposing ``set_prompts`` and
+            ``process_image``.
+        image: A ``dimos.msgs.sensor_msgs.Image`` to ground against.
+        description: Natural-language name of the object to locate.
+
+    Returns:
+        Every matching detection's ``(x1, y1, x2, y2)`` bbox as a tuple of
+        floats, sorted by detection confidence in descending order. Empty list
+        if nothing matched.
+    """
+    # Skip the costly text re-encode when the target hasn't changed since this
+    # detector's last call (the steady-state per-frame tracking path).
+    if getattr(detector, "_yoloe_grounder_prompt", None) != description:
+        detector.set_prompts(text=[description])
+        detector._yoloe_grounder_prompt = description
+
+    result = detector.process_image(image)
+
+    detections = sorted(result.detections, key=lambda d: d.confidence, reverse=True)
+    return [
+        (float(x1), float(y1), float(x2), float(y2))
+        for x1, y1, x2, y2 in (d.bbox for d in detections)
+    ]
+
+
 def ground_with_yoloe(detector, image, description: str) -> BBox | None:
     """Return the (x1,y1,x2,y2) bbox of the best YOLOE match for `description`, or None.
 
@@ -76,18 +111,92 @@ def ground_with_yoloe(detector, image, description: str) -> BBox | None:
         The bounding box of the single highest-confidence detection as a
         ``(x1, y1, x2, y2)`` tuple of floats, or ``None`` if nothing matched.
     """
-    # Skip the costly text re-encode when the target hasn't changed since this
-    # detector's last call (the steady-state per-frame tracking path).
-    if getattr(detector, "_yoloe_grounder_prompt", None) != description:
-        detector.set_prompts(text=[description])
-        detector._yoloe_grounder_prompt = description
+    candidates = ground_candidates_with_yoloe(detector, image, description)
+    return candidates[0] if candidates else None
 
-    result = detector.process_image(image)
 
-    detections = result.detections
-    if not detections:
+def select_by_position(candidates: list[BBox], qualifier: str) -> BBox | None:
+    """Pick one bbox from `candidates` by a geometric `qualifier`, model-free.
+
+    Disambiguates a set of same-class boxes (as returned by
+    :func:`ground_candidates_with_yoloe`) using box geometry alone — no model,
+    no image content. Useful for resolving spatial language like "the leftmost
+    chair" or "the largest screen".
+
+    Args:
+        candidates: Bounding boxes to choose among, conventionally ordered by
+            descending confidence (the order :func:`ground_candidates_with_yoloe`
+            produces). Ties resolve to the first box in this order, so a
+            confidence-sorted input makes ties deterministic and sensible.
+        qualifier: Case-insensitive spatial selector. One of ``leftmost``,
+            ``rightmost``, ``topmost``, ``bottommost``, ``largest``,
+            ``smallest``, or ``center`` (the box whose center is closest to the
+            mean of all candidate centers).
+
+    Returns:
+        The chosen ``(x1, y1, x2, y2)`` bbox, or ``None`` if ``candidates`` is
+        empty.
+
+    Raises:
+        ValueError: If ``qualifier`` is not a recognized selector.
+    """
+    if not candidates:
         return None
 
-    best = max(detections, key=lambda d: d.confidence)
-    x1, y1, x2, y2 = best.bbox
-    return (float(x1), float(y1), float(x2), float(y2))
+    def _cx(b: BBox) -> float:
+        return (b[0] + b[2]) / 2.0
+
+    def _cy(b: BBox) -> float:
+        return (b[1] + b[3]) / 2.0
+
+    def _area(b: BBox) -> float:
+        return abs(b[2] - b[0]) * abs(b[3] - b[1])
+
+    key = qualifier.strip().lower()
+    if key == "leftmost":
+        return min(candidates, key=_cx)
+    if key == "rightmost":
+        return max(candidates, key=_cx)
+    if key == "topmost":
+        return min(candidates, key=_cy)
+    if key == "bottommost":
+        return max(candidates, key=_cy)
+    if key == "largest":
+        return max(candidates, key=_area)
+    if key == "smallest":
+        return min(candidates, key=_area)
+    if key == "center":
+        mean_cx = sum(_cx(b) for b in candidates) / len(candidates)
+        mean_cy = sum(_cy(b) for b in candidates) / len(candidates)
+        return min(
+            candidates,
+            key=lambda b: (_cx(b) - mean_cx) ** 2 + (_cy(b) - mean_cy) ** 2,
+        )
+
+    raise ValueError(f"Unknown position qualifier: {qualifier!r}")
+
+
+def ground_with_position(
+    detector, image, description: str, qualifier: str | None = None
+) -> BBox | None:
+    """Ground `description` and optionally resolve it spatially via `qualifier`.
+
+    A thin convenience over :func:`ground_candidates_with_yoloe`: with a
+    ``qualifier`` it returns the geometrically-selected box (see
+    :func:`select_by_position`); without one it returns the top-confidence box,
+    matching :func:`ground_with_yoloe`.
+
+    Args:
+        detector: A constructed open-vocab detector.
+        image: A ``dimos.msgs.sensor_msgs.Image`` to ground against.
+        description: Natural-language name of the object to locate.
+        qualifier: Optional spatial selector passed to
+            :func:`select_by_position`.
+
+    Returns:
+        The chosen ``(x1, y1, x2, y2)`` bbox, or ``None`` if nothing matched.
+    """
+    candidates = ground_candidates_with_yoloe(detector, image, description)
+    if qualifier is None:
+        return candidates[0] if candidates else None
+    return select_by_position(candidates, qualifier)
