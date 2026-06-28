@@ -1263,3 +1263,22 @@ def test_get_object_bboxes_strips_quantifier_to_class(image: Image) -> None:
     )
     boxes = get_object_bboxes(_RaisingVlModel(), image, "both chairs", detector=detector)
     assert boxes == [(1.0, 2.0, 3.0, 4.0), (5.0, 6.0, 7.0, 8.0)]
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("could you find the cup", ("cup", None)),
+        ("can you go to the door", ("door", None)),
+        ("please find the chair", ("chair", None)),
+        ("i want you to find the bottle", ("bottle", None)),
+        ("would you please grab the leftmost bottle", ("bottle", "leftmost")),
+        ("look for the red mug", ("red mug", None)),
+        # Must NOT over-strip: no article after the "verb" -> left intact.
+        ("pickup truck", ("pickup truck", None)),
+        ("getaway car", ("getaway car", None)),
+        ("go to school", ("go to school", None)),
+    ],
+)
+def test_parse_grounding_query_strips_preamble_and_imperative(query: str, expected: tuple) -> None:
+    assert parse_grounding_query(query) == expected

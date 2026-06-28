@@ -712,12 +712,18 @@ def parse_grounding_query(description: str) -> tuple[str, str | None]:
     # literally ("person.") and find nothing.
     text = " ".join(description.strip().split()).strip(" ,.!?;:")
 
-    # Strip a leading imperative that agents prepend ("find the person", "go to
-    # the chair"). Only when followed by an article, which anchors that the rest
-    # is the object reference — so e.g. "pickup truck" (no article) is untouched.
+    # Strip a leading imperative (and any polite preamble) that agents/users
+    # prepend ("find the person", "could you go to the chair"). Only when an
+    # article follows, which anchors that the rest is the object reference — so
+    # "pickup truck" / "getaway car" / "go to school" (no article) are untouched.
     text = re.sub(
-        r"^(?:please\s+)?(?:find|locate|detect|go to|navigate to|show me|get|"
-        r"grab|bring me|pick up)\s+(?=(?:the|a|an)\s+)",
+        r"^(?:please\s+|(?:could|can|would|will)\s+you\s+|"
+        r"i\s+(?:want|need|would\s+like|'d\s+like)\s+you\s+to\s+)*"
+        r"(?:please\s+)?"
+        r"(?:find|locate|detect|identify|go\s+to|navigate\s+to|head\s+to|move\s+to|"
+        r"walk\s+to|take\s+me\s+to|show\s+me|get|grab|bring\s+me|pick\s+up|"
+        r"look\s+for|search\s+for|point\s+to|point\s+out)\s+"
+        r"(?=(?:the|a|an)\s+)",
         "",
         text,
         flags=re.IGNORECASE,
