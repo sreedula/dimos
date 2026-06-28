@@ -584,6 +584,13 @@ def test_clip_text_embedding_is_cached() -> None:
         ("the person", ("person", None)),
         ("a bus", ("bus", None)),
         ("the red mug", ("red mug", None)),
+        # Leading imperatives (anchored by an article) are stripped too.
+        ("find the person", ("person", None)),
+        ("go to the chair", ("chair", None)),
+        ("navigate to the bus", ("bus", None)),
+        ("pick up the bottle", ("bottle", None)),
+        # No article anchor -> NOT treated as an imperative, left intact.
+        ("pickup truck", ("pickup truck", None)),
     ],
 )
 def test_parse_grounding_query(query: str, expected: tuple) -> None:

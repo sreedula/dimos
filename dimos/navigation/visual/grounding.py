@@ -643,6 +643,17 @@ def parse_grounding_query(description: str) -> tuple[str, str | None]:
     """
     text = " ".join(description.strip().split())
 
+    # Strip a leading imperative that agents prepend ("find the person", "go to
+    # the chair"). Only when followed by an article, which anchors that the rest
+    # is the object reference — so e.g. "pickup truck" (no article) is untouched.
+    text = re.sub(
+        r"^(?:please\s+)?(?:find|locate|detect|go to|navigate to|show me|get|"
+        r"grab|bring me|pick up)\s+(?=(?:the|a|an)\s+)",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+
     # Ordinals first ("the second chair from the left"), so the bare-direction
     # patterns below don't capture the "left" inside them.
     ordinal_match = _ORDINAL_RE.search(text)
