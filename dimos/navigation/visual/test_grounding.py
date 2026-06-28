@@ -961,3 +961,14 @@ def test_get_object_bboxes_retries_at_lower_confidence(image: Image) -> None:
     boxes = get_object_bboxes(_RaisingVlModel(), image, "all the bottles", detector=detector)
     assert boxes == [(1.0, 2.0, 3.0, 4.0)]
     assert detector.confidence == 0.6  # restored
+
+
+@pytest.mark.self_hosted
+def test_clip_scores_handles_grayscale_image() -> None:
+    """clip_scores promotes a grayscale frame to 3 channels instead of crashing."""
+    from dimos.navigation.visual.grounding import clip_scores
+
+    gray = Image.from_numpy(np.zeros((32, 32), dtype=np.uint8), format=ImageFormat.BGR)
+    scores = clip_scores(gray, [(0.0, 0.0, 16.0, 16.0), (16.0, 16.0, 32.0, 32.0)], "a box")
+    assert len(scores) == 2
+    assert all(isinstance(s, float) for s in scores)

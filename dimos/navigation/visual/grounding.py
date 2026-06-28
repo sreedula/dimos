@@ -314,8 +314,16 @@ def clip_scores(image, candidates: list[BBox], phrase: str) -> list[float]:
 
     model, preprocess = _load_clip()
 
+    # Promote a grayscale (2D / single-channel) frame to 3 channels so the
+    # BGR->RGB reversal and PIL conversion below don't choke on it.
+    bgr = image.to_opencv()
+    if bgr.ndim == 2:
+        bgr = np.repeat(bgr[:, :, None], 3, axis=2)
+    elif bgr.ndim == 3 and bgr.shape[2] == 1:
+        bgr = np.repeat(bgr, 3, axis=2)
+
     # BGR -> RGB; a contiguous copy keeps PIL happy with the reversed-stride view.
-    rgb = np.ascontiguousarray(image.to_opencv()[:, :, ::-1])
+    rgb = np.ascontiguousarray(bgr[:, :, ::-1])
     height, width = rgb.shape[:2]
 
     crops = []
