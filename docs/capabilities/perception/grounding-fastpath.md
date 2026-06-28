@@ -31,9 +31,11 @@ bbox = get_object_bbox(vl_model, image, "person", detector=detector)
 `get_object_bbox` parses the description and disambiguates with the right strategy — all on the fast path, no VLM call:
 
 ```python
-get_object_bbox(vl_model, image, "the leftmost person", detector=detector)  # spatial
-get_object_bbox(vl_model, image, "the biggest chair",   detector=detector)  # largest/nearest
-get_object_bbox(vl_model, image, "the red mug",         detector=detector)  # appearance (CLIP re-rank)
+get_object_bbox(vl_model, image, "find the leftmost person", detector=detector)  # spatial + imperative
+get_object_bbox(vl_model, image, "the second chair from the left", detector=detector)  # ordinal
+get_object_bbox(vl_model, image, "the red mug",                detector=detector)  # appearance (CLIP)
+get_object_bbox(vl_model, image, "the cup next to the laptop", detector=detector)  # proximity relation
+get_object_bbox(vl_model, image, "the bottle to the left of the laptop", detector=detector)  # direction
 
 # Tracking: feed the previous frame's box so the same instance stays locked,
 # instead of jumping to a higher-confidence different instance.
@@ -50,10 +52,13 @@ boxes = get_object_bboxes(vl_model, image, "person", detector=detector)  # e.g. 
 - **Appearance** — a multi-word phrase ("red mug") re-ranks same-class candidates by CLIP similarity; degrades to the top box if CLIP is unavailable.
 - **Relational** — "the cup **next to** the laptop" (proximity: `near`/`beside`/`closest to`) or "the bottle **to the left of** the laptop" (direction: `left`/`right`/`above`/`below`) grounds both objects and returns the instance with that spatial relation to the reference.
 - **Tracking** — `prev_box` selects the candidate most consistent with the last box (highest IoU, else nearest center).
+- **Phrasing robustness** — leading articles ("**the** person") and imperatives ("**find the** chair") are stripped (they otherwise wreck YOLOE's text-encoder recall — "person" finds 5 boxes, "the person" finds 0), plurals are singularized, and grayscale frames are promoted to BGR rather than crashing.
+- **Recall retry** — when nothing is found at the detector's confidence, one cheap retry at a lower threshold runs before the caller falls to the slow VLM, catching faint/small objects on the fast path. Tunable: `build_yoloe_grounding_detector(confidence=..., iou_threshold=...)`.
+- **Performance** — text-prompt embeddings (the ~135 ms YOLOE encoder pass) and CLIP text embeddings are cached per phrase, so repeated or alternating grounding — relational queries, multi-object, per-frame re-grounding — re-pays only the ~50 ms detection, not the encode.
 
 The `navigation` skill feeds its last goal box back as `prev_box` automatically, so re-grounding the same goal across frames stays locked on one instance. The `person_follow` skill uses the same hint to **recover from tracking loss**: when EdgeTAM loses the target it re-grounds with YOLOE (hinted by the last box) and re-initializes the tracker — re-locking the *same* person after a brief occlusion instead of giving up.
 
-The underlying primitives live in `dimos.navigation.visual.grounding` (`resolve_grounding`, `ground_candidates_with_yoloe`, `select_by_position`, `select_by_clip`, `select_nearest`). The detector memoizes the prompt, so grounding the same object across consecutive frames skips the text re-encode and pays only the detection cost.
+The underlying primitives live in `dimos.navigation.visual.grounding`: `resolve_grounding` (the dispatcher), `ground_candidates_with_yoloe`, and the model-free selectors `select_by_position` (spatial/ordinal), `select_by_clip` (appearance), `select_nearest` (tracking), and `select_by_relation` (proximity/directional), plus `parse_grounding_query` / `parse_relational_query` and `retry_at_lower_confidence`. The detector also memoizes the current prompt, so grounding the same object across consecutive frames skips even the cache lookup.
 
 ## Benchmark
 
