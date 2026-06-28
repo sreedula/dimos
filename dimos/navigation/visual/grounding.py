@@ -852,14 +852,21 @@ def resolve_grounding(
         relational = parse_relational_query(description)
         if relational is not None:
             object_phrase, relation, reference_phrase = relational
-            reference_box = ground_with_yoloe(
-                detector, image, _singularize_head(parse_grounding_query(reference_phrase)[0])
-            )
-            obj_candidates = ground_candidates_with_yoloe(
-                detector, image, _singularize_head(parse_grounding_query(object_phrase)[0])
-            )
-            if reference_box is not None and obj_candidates:
-                chosen = select_by_relation(obj_candidates, relation, reference_box)
+            ref_class = _singularize_head(parse_grounding_query(reference_phrase)[0])
+            obj_class = _singularize_head(parse_grounding_query(object_phrase)[0])
+
+            # Use the same recall retry as the other paths so a faint reference or
+            # object still resolves on the fast path instead of going to the VLM.
+            obj_candidates = ground_candidates_with_yoloe(detector, image, obj_class)
+            if not obj_candidates:
+                obj_candidates = retry_at_lower_confidence(detector, image, obj_class)
+
+            ref_candidates = ground_candidates_with_yoloe(detector, image, ref_class)
+            if not ref_candidates:
+                ref_candidates = retry_at_lower_confidence(detector, image, ref_class)
+
+            if ref_candidates and obj_candidates:
+                chosen = select_by_relation(obj_candidates, relation, ref_candidates[0])
                 if chosen is not None:
                     return chosen
             # Reference/object missing or nothing on that side: VLM resolves it.

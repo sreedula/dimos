@@ -1067,3 +1067,31 @@ def test_resolve_grounding_relational_directional_end_to_end(image: Image) -> No
         240.0,
         140.0,
     )
+
+
+def test_resolve_grounding_relational_uses_recall_retry(image: Image) -> None:
+    # "cup" only detectable below conf 0.3; relational grounding must still find
+    # it via the recall retry instead of giving up to the VLM.
+    class _ConfRelFake:
+        def __init__(self) -> None:
+            self.confidence = 0.6
+            self._prompt: str | None = None
+
+        def set_prompts(self, text: list[str] | None = None, bboxes=None) -> None:
+            self._prompt = text[0] if text else None
+
+        def process_image(self, image: Image) -> _FakeResult:
+            if self._prompt == "laptop":
+                return _FakeResult([_FakeDetection("laptop", 0.9, (100, 100, 140, 140))])
+            if self._prompt == "cup" and self.confidence <= 0.3:
+                return _FakeResult([_FakeDetection("cup", 0.3, (110, 110, 130, 130))])
+            return _FakeResult([])
+
+    detector = _ConfRelFake()
+    assert resolve_grounding(detector, image, "the cup next to the laptop") == (
+        110.0,
+        110.0,
+        130.0,
+        130.0,
+    )
+    assert detector.confidence == 0.6  # restored
