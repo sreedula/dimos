@@ -766,6 +766,29 @@ def _is_attributive(object_phrase: str) -> bool:
     return len(object_phrase.split()) > 1
 
 
+# Prepositions that introduce a trailing attribute ("person in red", "man
+# wearing a hat") — the object class is the noun BEFORE them, not the last word.
+_ATTRIBUTE_PREPS: tuple[str, ...] = (" wearing ", " holding ", " with ", " in ", " on ")
+
+
+def _object_class(phrase: str) -> str:
+    """The class noun to ground from an attributive phrase, singularized.
+
+    "red mug" -> "mug" (attribute first, so the last word is the class), but
+    "person in red" / "man wearing a hat" -> "person" / "man" — the attribute is
+    a trailing prepositional phrase, so the class is the noun before it, not the
+    last word (which would be the color/accessory and ground nothing).
+    """
+    lowered = phrase.lower()
+    cut = len(phrase)
+    for prep in _ATTRIBUTE_PREPS:
+        idx = lowered.find(prep)
+        if 0 < idx < cut:
+            cut = idx
+    before = phrase[:cut].split()
+    return singularize(before[-1]) if before else singularize(phrase.split()[-1])
+
+
 def _singularize_head(phrase: str) -> str:
     """Singularize the last word of a phrase ("red chairs" -> "red chair")."""
     words = phrase.split()
@@ -992,10 +1015,10 @@ def resolve_grounding(
 
     candidates = ground_candidates_with_yoloe(detector, image, object_phrase)
     if not candidates and _is_attributive(object_phrase):
-        # Open-vocab recall fallback: try the bare, singularized head noun, e.g.
-        # "mug" for "red mug" / "red mugs", when the full phrase found nothing.
-        head_noun = singularize(object_phrase.split()[-1])
-        candidates = ground_candidates_with_yoloe(detector, image, head_noun)
+        # Open-vocab recall fallback: try the bare object class when the full
+        # phrase found nothing — "mug" for "red mug", but "person" for "person in
+        # red" (the class is before the preposition, not the last word).
+        candidates = ground_candidates_with_yoloe(detector, image, _object_class(object_phrase))
     if not candidates:
         # Last cheap try before the caller falls to the slow VLM: re-run YOLOE at
         # a lower confidence to catch a faint/small object it skipped. Only fires

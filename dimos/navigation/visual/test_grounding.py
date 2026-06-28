@@ -26,6 +26,7 @@ import pytest
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.navigation.visual import grounding as grounding_mod
 from dimos.navigation.visual.grounding import (
+    _object_class,
     box_iou,
     build_yoloe_grounding_detector,
     ground_candidates_with_yoloe,
@@ -1339,3 +1340,25 @@ def test_resolve_grounding_integration_realistic_queries(image: Image) -> None:
     }
     for query, want in expected.items():
         assert resolve_grounding(detector, image, query) == want, query
+
+
+@pytest.mark.parametrize(
+    "phrase,expected",
+    [
+        ("red mug", "mug"),  # attribute first -> last word is the class
+        ("person in red", "person"),  # attribute after a preposition
+        ("man wearing a hat", "man"),
+        ("woman holding a cup", "woman"),
+        ("person in a dark jacket", "person"),
+        ("large blue chair", "chair"),
+    ],
+)
+def test_object_class(phrase: str, expected: str) -> None:
+    assert _object_class(phrase) == expected
+
+
+def test_resolve_grounding_attribute_after_preposition(image: Image) -> None:
+    # "person in red": the full phrase finds nothing, and the recall fallback must
+    # ground "person" (before the preposition), NOT "red" (which would be None).
+    detector = _FakeDetector({"person": [_FakeDetection("person", 0.9, (1, 2, 3, 4))]})
+    assert resolve_grounding(detector, image, "the person in red") == (1.0, 2.0, 3.0, 4.0)
