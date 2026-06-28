@@ -344,6 +344,129 @@ def select_by_clip(
     return candidates[best]
 
 
+def box_iou(a: BBox, b: BBox) -> float:
+    """Intersection-over-union of two ``(x1, y1, x2, y2)`` boxes, in ``0..1``.
+
+    The standard overlap metric: the area of the boxes' intersection divided by
+    the area of their union. ``1.0`` for identical boxes, ``0.0`` when they don't
+    touch. Used by :func:`select_nearest` to keep a tracked target locked onto the
+    same instance across frames.
+
+    Args:
+        a: A ``(x1, y1, x2, y2)`` box.
+        b: A ``(x1, y1, x2, y2)`` box.
+
+    Returns:
+        Their IoU as a float in ``[0.0, 1.0]``; ``0.0`` if they don't overlap or
+        either box has zero area.
+    """
+    ix1 = max(a[0], b[0])
+    iy1 = max(a[1], b[1])
+    ix2 = min(a[2], b[2])
+    iy2 = min(a[3], b[3])
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    if inter <= 0.0:
+        return 0.0
+    area_a = abs(a[2] - a[0]) * abs(a[3] - a[1])
+    area_b = abs(b[2] - b[0]) * abs(b[3] - b[1])
+    union = area_a + area_b - inter
+    return inter / union if union > 0.0 else 0.0
+
+
+def select_nearest(
+    candidates: list[BBox], prev_box: BBox, *, min_iou: float = 0.0
+) -> BBox | None:
+    """Pick the candidate most consistent with `prev_box`, for frame-to-frame tracking.
+
+    The tracking counterpart to :func:`select_by_position` and
+    :func:`select_by_clip`: where those disambiguate same-class boxes by geometry
+    or appearance, this disambiguates by *continuity* — returning the box that
+    best matches where the target was last seen. This stops the grounded box from
+    flipping between instances (e.g. between two people) when confidence alone
+    would jump frame to frame.
+
+    Candidates are ranked primarily by highest IoU with ``prev_box``. When every
+    candidate's IoU is ``0.0`` — the target briefly stopped overlapping its last
+    position — it falls back to the smallest center-to-center distance, so the
+    track survives short gaps instead of being dropped.
+
+    Args:
+        candidates: ``(x1, y1, x2, y2)`` boxes to choose among, conventionally
+            ordered by descending confidence. Ties resolve to the earliest box in
+            this order.
+        prev_box: The target's last known ``(x1, y1, x2, y2)`` box.
+        min_iou: If positive and the best candidate's IoU with ``prev_box`` is
+            below it, return ``None`` — the target is considered lost rather than
+            silently re-locked onto a non-overlapping box.
+
+    Returns:
+        The chosen ``(x1, y1, x2, y2)`` box, ``None`` if ``candidates`` is empty,
+        or ``None`` if ``min_iou`` is positive and no candidate overlaps
+        ``prev_box`` by at least that much.
+    """
+    if not candidates:
+        return None
+
+    ious = [box_iou(c, prev_box) for c in candidates]
+    best_iou = max(ious)
+
+    if best_iou > 0.0:
+        if min_iou > 0.0 and best_iou < min_iou:
+            return None
+        return candidates[max(range(len(candidates)), key=lambda i: ious[i])]
+
+    # No candidate overlaps the last box: a strict min_iou treats the target as
+    # lost; otherwise fall back to the nearest center to track through the gap.
+    if min_iou > 0.0:
+        return None
+
+    pcx = (prev_box[0] + prev_box[2]) / 2.0
+    pcy = (prev_box[1] + prev_box[3]) / 2.0
+
+    def _dist2(b: BBox) -> float:
+        cx = (b[0] + b[2]) / 2.0
+        cy = (b[1] + b[3]) / 2.0
+        return (cx - pcx) ** 2 + (cy - pcy) ** 2
+
+    return min(candidates, key=_dist2)
+
+
+def ground_with_tracking(
+    detector,
+    image,
+    description: str,
+    prev_box: BBox | None = None,
+    *,
+    min_iou: float = 0.0,
+) -> BBox | None:
+    """Ground `description`, preferring the candidate nearest `prev_box` when tracking.
+
+    A thin convenience over :func:`ground_candidates_with_yoloe`: with a
+    ``prev_box`` it returns the box most consistent with the target's last known
+    position (see :func:`select_nearest`), keeping a track locked onto the same
+    instance; without one it returns the top-confidence box, matching
+    :func:`ground_with_yoloe`.
+
+    Args:
+        detector: A constructed open-vocab detector.
+        image: A ``dimos.msgs.sensor_msgs.Image`` to ground against.
+        description: Natural-language name of the object to locate.
+        prev_box: The target's last known ``(x1, y1, x2, y2)`` box, or ``None`` on
+            the first frame / when not tracking.
+        min_iou: Forwarded to :func:`select_nearest`; if positive and no candidate
+            overlaps ``prev_box`` by at least this much, the target is treated as
+            lost and ``None`` is returned.
+
+    Returns:
+        The chosen ``(x1, y1, x2, y2)`` bbox, or ``None`` if nothing matched (or
+        the target was lost under ``min_iou``).
+    """
+    candidates = ground_candidates_with_yoloe(detector, image, description)
+    if prev_box is None:
+        return candidates[0] if candidates else None
+    return select_nearest(candidates, prev_box, min_iou=min_iou)
+
+
 def ground_with_attribute(
     detector, image, object_noun: str, phrase: str | None = None
 ) -> BBox | None:

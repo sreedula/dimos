@@ -25,13 +25,16 @@ import pytest
 
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.navigation.visual.grounding import (
+    box_iou,
     build_yoloe_grounding_detector,
     ground_candidates_with_yoloe,
     ground_with_attribute,
     ground_with_position,
+    ground_with_tracking,
     ground_with_yoloe,
     select_by_clip,
     select_by_position,
+    select_nearest,
 )
 from dimos.navigation.visual.query import get_object_bbox, get_object_bbox_from_image
 
@@ -372,6 +375,104 @@ def test_ground_with_attribute_returns_none_for_absent_object(image: Image) -> N
 
     assert ground_with_attribute(detector, image, "banana") is None
     assert ground_with_attribute(detector, image, "banana", phrase="red banana") is None
+
+
+# --- Track-consistency disambiguation (Phase 3) ---------------------------
+#
+# These prove the grounded box stays locked onto the same instance across
+# frames by preferring the candidate nearest the target's last known box,
+# instead of letting confidence flip it to a different instance.
+
+
+def test_box_iou_identical_boxes_is_one() -> None:
+    box = (10.0, 20.0, 30.0, 50.0)
+    assert box_iou(box, box) == 1.0
+
+
+def test_box_iou_disjoint_boxes_is_zero() -> None:
+    a = (0.0, 0.0, 10.0, 10.0)
+    b = (100.0, 100.0, 110.0, 110.0)
+    assert box_iou(a, b) == 0.0
+
+
+def test_box_iou_partial_overlap_known_value() -> None:
+    # Two 10x10 boxes offset by (5, 5): intersection is the 5x5 corner = 25,
+    # union is 100 + 100 - 25 = 175, so IoU = 25/175 = 1/7.
+    a = (0.0, 0.0, 10.0, 10.0)
+    b = (5.0, 5.0, 15.0, 15.0)
+    assert box_iou(a, b) == pytest.approx(25.0 / 175.0)
+
+
+def test_select_nearest_returns_none_on_empty() -> None:
+    assert select_nearest([], (0.0, 0.0, 10.0, 10.0)) is None
+
+
+def test_select_nearest_prefers_overlapping_target_over_distant_box() -> None:
+    # The target was last here. The "same target slightly moved" candidate
+    # overlaps it strongly; the "different instance" is far away with zero
+    # overlap. Listed different-instance-first (as if it were higher
+    # confidence) to prove IoU — not order — drives the choice.
+    prev = (100.0, 100.0, 140.0, 140.0)
+    different_instance = (300.0, 300.0, 340.0, 340.0)
+    moved_same_target = (104.0, 101.0, 144.0, 141.0)
+
+    assert select_nearest([different_instance, moved_same_target], prev) == moved_same_target
+
+
+def test_select_nearest_falls_back_to_nearest_center_when_no_overlap() -> None:
+    # No candidate overlaps the last box (all IoU 0): track through the gap by
+    # picking the nearest center. The near box wins over the far one.
+    prev = (0.0, 0.0, 10.0, 10.0)
+    near = (20.0, 20.0, 30.0, 30.0)  # center (25, 25)
+    far = (200.0, 200.0, 210.0, 210.0)  # center (205, 205)
+
+    assert select_nearest([far, near], prev) == near
+
+
+def test_select_nearest_returns_none_when_best_iou_below_min_iou() -> None:
+    # Only a sliver of overlap; a strict min_iou treats the target as lost.
+    prev = (0.0, 0.0, 10.0, 10.0)
+    sliver = (8.0, 8.0, 18.0, 18.0)  # IoU ~= 0.02
+
+    assert select_nearest([sliver], prev, min_iou=0.5) is None
+
+
+def test_ground_with_tracking_locks_onto_nearest_not_top_confidence(image: Image) -> None:
+    # Two people: the top-confidence detection is a *different* instance far from
+    # where we last saw our target; the lower-confidence detection is our target
+    # slightly moved. With prev_box, tracking must keep our target.
+    detector = _FakeDetector(
+        {
+            "person": [
+                _FakeDetection("person", 0.95, (300, 300, 340, 340)),  # top conf, different
+                _FakeDetection("person", 0.80, (104, 101, 144, 141)),  # our moved target
+            ]
+        }
+    )
+    prev = (100.0, 100.0, 140.0, 140.0)
+
+    assert ground_with_tracking(detector, image, "person", prev) == (104.0, 101.0, 144.0, 141.0)
+
+
+def test_ground_with_tracking_without_prev_box_returns_top_confidence(image: Image) -> None:
+    detector = _FakeDetector(
+        {
+            "person": [
+                _FakeDetection("person", 0.95, (300, 300, 340, 340)),
+                _FakeDetection("person", 0.80, (104, 101, 144, 141)),
+            ]
+        }
+    )
+
+    # No prev_box -> behaves like ground_with_yoloe: top-confidence box wins.
+    assert ground_with_tracking(detector, image, "person") == (300.0, 300.0, 340.0, 340.0)
+
+
+def test_ground_with_tracking_returns_none_for_absent_object(image: Image) -> None:
+    detector = _FakeDetector({"person": [_FakeDetection("person", 0.9, (1, 2, 3, 4))]})
+
+    assert ground_with_tracking(detector, image, "banana") is None
+    assert ground_with_tracking(detector, image, "banana", (0.0, 0.0, 10.0, 10.0)) is None
 
 
 @pytest.mark.self_hosted
