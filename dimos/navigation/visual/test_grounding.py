@@ -1206,3 +1206,26 @@ def test_parse_grounding_query_multiword_spatial(query: str, expected: tuple) ->
     # A multi-word spatial phrase must be stripped whole, not leave a fragment
     # ("in the middle" -> center, object "person", NOT "person in the").
     assert parse_grounding_query(query) == expected
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("the person.", ("person", None)),
+        ("the chair?", ("chair", None)),
+        ("person!", ("person", None)),
+        ("the person in the middle.", ("person", "center")),
+        ("the second chair from the left.", ("chair", "from-left:2")),
+    ],
+)
+def test_parse_grounding_query_strips_trailing_punctuation(query: str, expected: tuple) -> None:
+    # Trailing punctuation an agent/user adds must not become part of the class.
+    assert parse_grounding_query(query) == expected
+
+
+def test_parse_relational_query_strips_trailing_punctuation() -> None:
+    assert parse_relational_query("the bottle to the left of the cup.") == (
+        "the bottle",
+        "left",
+        "the cup",
+    )

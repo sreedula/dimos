@@ -674,7 +674,10 @@ def parse_grounding_query(description: str) -> tuple[str, str | None]:
         ``(object_phrase, qualifier)`` where ``qualifier`` is one of the
         selectors understood by :func:`select_by_position`, or ``None``.
     """
-    text = " ".join(description.strip().split())
+    # Normalize whitespace and drop surrounding punctuation an agent or user may
+    # add ("the person." / "the chair?"), which would otherwise be grounded
+    # literally ("person.") and find nothing.
+    text = " ".join(description.strip().split()).strip(" ,.!?;:")
 
     # Strip a leading imperative that agents prepend ("find the person", "go to
     # the chair"). Only when followed by an article, which anchors that the rest
@@ -767,10 +770,15 @@ def parse_relational_query(description: str) -> tuple[str, str, str] | None:
     alone can't express. ``relation`` is one of ``near``/``left``/``right``/
     ``above``/``below``.
     """
-    match = _RELATION_RE.match(" ".join(description.strip().split()))
+    normalized = " ".join(description.strip().split()).strip(" ,.!?;:")
+    match = _RELATION_RE.match(normalized)
     if not match:
         return None
-    return match.group(1).strip(), _RELATIONS[match.group(2).lower()], match.group(3).strip()
+    return (
+        match.group(1).strip(" ,.!?;:"),
+        _RELATIONS[match.group(2).lower()],
+        match.group(3).strip(" ,.!?;:"),
+    )
 
 
 def select_by_nearest_to_reference(candidates: list[BBox], reference: BBox) -> BBox | None:
