@@ -34,8 +34,10 @@ from dimos.navigation.visual.grounding import (
     ground_with_tracking,
     ground_with_yoloe,
     parse_grounding_query,
+    parse_relational_query,
     resolve_grounding,
     select_by_clip,
+    select_by_nearest_to_reference,
     select_by_position,
     select_nearest,
     singularize,
@@ -972,3 +974,52 @@ def test_clip_scores_handles_grayscale_image() -> None:
     scores = clip_scores(gray, [(0.0, 0.0, 16.0, 16.0), (16.0, 16.0, 32.0, 32.0)], "a box")
     assert len(scores) == 2
     assert all(isinstance(s, float) for s in scores)
+
+
+# --- Relational grounding ("the cup next to the laptop") ---
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("the cup next to the laptop", ("the cup", "the laptop")),
+        ("bottle near the keyboard", ("bottle", "the keyboard")),
+        ("a chair beside the table", ("a chair", "the table")),
+        ("person", None),  # no relation
+        ("the nearest person", None),  # "near" must not match inside "nearest"
+    ],
+)
+def test_parse_relational_query(query: str, expected) -> None:
+    assert parse_relational_query(query) == expected
+
+
+def test_select_by_nearest_to_reference() -> None:
+    reference = (100.0, 100.0, 140.0, 140.0)  # center (120, 120)
+    near = (110.0, 110.0, 130.0, 130.0)  # center (120, 120)
+    far = (0.0, 0.0, 20.0, 20.0)
+    assert select_by_nearest_to_reference([far, near], reference) == near
+    assert select_by_nearest_to_reference([], reference) is None
+
+
+def test_resolve_grounding_relational_picks_nearest(image: Image) -> None:
+    detector = _FakeDetector(
+        {
+            "laptop": [_FakeDetection("laptop", 0.9, (100, 100, 140, 130))],
+            "cup": [
+                _FakeDetection("cup", 0.9, (0, 0, 20, 20)),  # far from laptop
+                _FakeDetection("cup", 0.8, (110, 110, 130, 130)),  # next to laptop
+            ],
+        }
+    )
+    assert resolve_grounding(detector, image, "the cup next to the laptop") == (
+        110.0,
+        110.0,
+        130.0,
+        130.0,
+    )
+
+
+def test_resolve_grounding_relational_none_when_reference_missing(image: Image) -> None:
+    # Object present but reference absent -> None (caller falls to the VLM).
+    detector = _FakeDetector({"cup": [_FakeDetection("cup", 0.9, (0, 0, 20, 20))]})
+    assert resolve_grounding(detector, image, "the cup next to the laptop") is None

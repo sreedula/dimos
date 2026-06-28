@@ -691,6 +691,48 @@ def _is_attributive(object_phrase: str) -> bool:
     return len(object_phrase.split()) > 1
 
 
+def _singularize_head(phrase: str) -> str:
+    """Singularize the last word of a phrase ("red chairs" -> "red chair")."""
+    words = phrase.split()
+    if not words:
+        return phrase
+    words[-1] = singularize(words[-1])
+    return " ".join(words)
+
+
+# Proximity relations: "the cup next to the laptop". Spaces around each form keep
+# them from matching inside words (e.g. "near" won't match "nearest").
+_RELATION_RE = re.compile(
+    r"^(.+?)\s+(?:next to|closest to|close to|nearest to|beside|near)\s+(.+)$",
+    re.IGNORECASE,
+)
+
+
+def parse_relational_query(description: str) -> tuple[str, str] | None:
+    """Split "X near/next-to Y" into (object phrase, reference phrase), or None.
+
+    Recognizes proximity relations ("the cup next to the laptop") so the object
+    instance can be disambiguated by which one is closest to a reference object —
+    a relation YOLOE alone can't express.
+    """
+    match = _RELATION_RE.match(" ".join(description.strip().split()))
+    if not match:
+        return None
+    return match.group(1).strip(), match.group(2).strip()
+
+
+def select_by_nearest_to_reference(candidates: list[BBox], reference: BBox) -> BBox | None:
+    """Return the candidate whose center is closest to the reference box's center."""
+    if not candidates:
+        return None
+    rx = (reference[0] + reference[2]) / 2.0
+    ry = (reference[1] + reference[3]) / 2.0
+    return min(
+        candidates,
+        key=lambda b: ((b[0] + b[2]) / 2.0 - rx) ** 2 + ((b[1] + b[3]) / 2.0 - ry) ** 2,
+    )
+
+
 # Lower bound for the recall retry: still a real detection, not noise.
 _RECALL_RETRY_CONFIDENCE = 0.25
 
@@ -742,14 +784,29 @@ def resolve_grounding(
     Returns:
         The chosen ``(x1, y1, x2, y2)`` bbox, or ``None`` if nothing matched.
     """
+    # Relational queries ("the cup next to the laptop"): ground both the object
+    # and the reference, then return the object instance closest to the reference.
+    # Tracking (prev_box) takes priority and skips this.
+    if prev_box is None:
+        relational = parse_relational_query(description)
+        if relational is not None:
+            object_phrase, reference_phrase = relational
+            reference_box = ground_with_yoloe(
+                detector, image, _singularize_head(parse_grounding_query(reference_phrase)[0])
+            )
+            obj_candidates = ground_candidates_with_yoloe(
+                detector, image, _singularize_head(parse_grounding_query(object_phrase)[0])
+            )
+            if reference_box is not None and obj_candidates:
+                return select_by_nearest_to_reference(obj_candidates, reference_box)
+            # Reference or object not found: let the VLM resolve the relation.
+            return None
+
     object_phrase, qualifier = parse_grounding_query(description)
 
     # Singularize the head noun so plural queries ("the leftmost chairs") ground
     # the class YOLOE knows ("chair"); non-plural -s words are left intact.
-    words = object_phrase.split()
-    if words:
-        words[-1] = singularize(words[-1])
-        object_phrase = " ".join(words)
+    object_phrase = _singularize_head(object_phrase)
 
     candidates = ground_candidates_with_yoloe(detector, image, object_phrase)
     if not candidates and _is_attributive(object_phrase):

@@ -48,6 +48,7 @@ boxes = get_object_bboxes(vl_model, image, "person", detector=detector)  # e.g. 
 
 - **Spatial** — `leftmost / rightmost / topmost / bottommost / largest (biggest, nearest) / smallest / center`, plus **ordinals** like "the second chair from the left" or "the last person from the right", all resolved geometrically.
 - **Appearance** — a multi-word phrase ("red mug") re-ranks same-class candidates by CLIP similarity; degrades to the top box if CLIP is unavailable.
+- **Relational** — "the cup **next to** the laptop" grounds both objects and returns the instance whose center is nearest the reference (also `near` / `beside` / `closest to`).
 - **Tracking** — `prev_box` selects the candidate most consistent with the last box (highest IoU, else nearest center).
 
 The `navigation` skill feeds its last goal box back as `prev_box` automatically, so re-grounding the same goal across frames stays locked on one instance. The `person_follow` skill uses the same hint to **recover from tracking loss**: when EdgeTAM loses the target it re-grounds with YOLOE (hinted by the last box) and re-initializes the tracker — re-locking the *same* person after a brief occlusion instead of giving up.
