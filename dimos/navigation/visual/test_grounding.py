@@ -610,3 +610,20 @@ def test_get_object_bbox_passes_prev_box_for_tracking(image: Image) -> None:
         _RaisingVlModel(), image, "person", detector=detector, prev_box=(11.0, 11.0, 31.0, 41.0)
     )
     assert bbox == (10.0, 10.0, 30.0, 40.0)
+
+
+def test_build_yoloe_grounding_detector_forwards_confidence(monkeypatch) -> None:
+    import dimos.perception.detection.detectors.yoloe as yoloe_mod
+
+    captured: dict = {}
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(yoloe_mod, "Yoloe2DDetector", _capture)
+    det = build_yoloe_grounding_detector(confidence=0.25)
+
+    assert det is not None
+    assert captured["confidence"] == 0.25  # recall knob threaded through
+    assert captured["max_area_ratio"] is None

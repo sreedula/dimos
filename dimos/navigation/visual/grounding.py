@@ -48,7 +48,7 @@ _clip_model: Any = None
 _clip_preprocess: Callable[..., Any] | None = None
 
 
-def build_yoloe_grounding_detector() -> Any | None:
+def build_yoloe_grounding_detector(confidence: float = 0.6) -> Any | None:
     """Best-effort construct the YOLOE fast-path detector; ``None`` on any failure.
 
     Grounding consumers use this to opt into the fast path without risking a
@@ -56,6 +56,11 @@ def build_yoloe_grounding_detector() -> Any | None:
     deployment, this returns ``None`` and the caller transparently falls back to
     the VLM-only path. ``max_area_ratio=None`` keeps large objects (e.g. a close
     person, a bus) instead of dropping anything over 30% of the frame.
+
+    Args:
+        confidence: Minimum detection confidence (0-1]. The default 0.6 favors
+            precision; lower it (e.g. 0.25) to raise recall on smaller or
+            partially-occluded targets.
     """
     try:
         from dimos.perception.detection.detectors.yoloe import (
@@ -63,7 +68,11 @@ def build_yoloe_grounding_detector() -> Any | None:
             YoloePromptMode,
         )
 
-        return Yoloe2DDetector(prompt_mode=YoloePromptMode.PROMPT, max_area_ratio=None)
+        return Yoloe2DDetector(
+            prompt_mode=YoloePromptMode.PROMPT,
+            max_area_ratio=None,
+            confidence=confidence,
+        )
     except Exception:
         logger.warning(
             "YOLOE grounding detector unavailable; using VLM-only grounding.",

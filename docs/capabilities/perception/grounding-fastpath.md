@@ -83,6 +83,8 @@ The two numbers above are on two images against another *detector*. `eval_ground
 
 On **prominent targets** — the objects a robot actually grounds and drives toward — YOLOE matches the human box at **median IoU 0.88** and localizes 66% of them well (IoU≥0.5), corroborating the 0.98-vs-YOLO11 signal against *real* ground truth over many images. The all-instances row collapses to 0.00 because COCO exhaustively annotates tiny/occluded background instances (223 of the 363) that the conf=0.6 fast-path deliberately does **not** fire on — that is a recall limit of the threshold, not a localization error: median IoU over the boxes YOLOE *does* return is still 0.87. Class-presence recall (a present class returned ≥1 box) is 69% (70/101). All CPU, still images only — an on-robot / simulator grounding run remains a separate manual follow-up.
 
+That recall/precision trade-off is **tunable**: `build_yoloe_grounding_detector(confidence=0.25)` lowers the threshold to find smaller/occluded targets (on `bus.jpg`, 0.6 → 3 people vs 0.25 → 5), while the default 0.6 favors precision. Nothing changes for existing callers, who keep 0.6.
+
 > **Honesty note — two different baselines, don't conflate them.**
 > - Everything above (YOLOE ~47 ms, Moondream ~41 s, 854×, the IoUs) is **measured on this CPU**.
 > - **854× is vs Moondream-on-CPU**, which is unusually slow. The *production* fallback is the hosted **Qwen2.5-VL-72B**, which is GPU-served and far faster (~2 s) despite being larger. So the production gap (YOLOE vs hosted Qwen) is only **~40×, and that one is an estimate** — there's no `ALIBABA_API_KEY` on the test machine to measure it. Never apply the 854× to Qwen.
