@@ -679,7 +679,10 @@ def parse_grounding_query(description: str) -> tuple[str, str | None]:
         return (noun or text), f"from-{ordinal_match.group(3).lower()}:{rank}"
 
     for phrases, qualifier in _SPATIAL_PATTERNS:
-        for phrase in phrases:
+        # Longest phrase first so a shorter form doesn't match inside a longer one
+        # and leave a fragment ("in the middle" must win over "middle", else the
+        # object becomes "person in the").
+        for phrase in sorted(phrases, key=len, reverse=True):
             pattern = re.compile(rf"\b{re.escape(phrase)}\b", re.IGNORECASE)
             if pattern.search(text):
                 stripped = pattern.sub(" ", text)

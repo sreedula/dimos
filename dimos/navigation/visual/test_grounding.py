@@ -1177,3 +1177,20 @@ def test_resolve_grounding_relational_nearest_across_multiple_references(image: 
         215.0,
         215.0,
     )
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("the person in the middle", ("person", "center")),
+        ("the chair in the middle", ("chair", "center")),
+        ("the box at the top", ("box", "topmost")),
+        ("the cup at the bottom", ("cup", "bottommost")),
+        ("the chair on the left", ("chair", "leftmost")),
+        ("the mug to the right", ("mug", "rightmost")),
+    ],
+)
+def test_parse_grounding_query_multiword_spatial(query: str, expected: tuple) -> None:
+    # A multi-word spatial phrase must be stripped whole, not leave a fragment
+    # ("in the middle" -> center, object "person", NOT "person in the").
+    assert parse_grounding_query(query) == expected
