@@ -62,12 +62,11 @@ Measured with `bench_grounding.py` on the bundled `bus.jpg` / `zidane.jpg` sampl
 
 | Path | Latency | Source |
 | --- | --- | --- |
-| YOLOE fast-path (CPU) | **~47 ms** | measured, CPU steady-state (warmup excluded) |
-| YOLOE fast-path (MPS) | **~24 ms** | measured, Apple-Silicon GPU |
+| YOLOE fast-path | **~47 ms** | measured, CPU steady-state (warmup excluded) |
 | Moondream VLM (local, ~2B) | **~41,000 ms** | **measured**, CPU |
 | Speedup | **~854×** | **measured**, same CPU |
 
-The speedup is now a **measured** number, not an estimate. The detector auto-selects the fastest available backend — CUDA, then Apple-Silicon **MPS** (~2× faster than CPU here), then CPU — and falls back to CPU if a GPU op is unsupported, so it's a free win where the hardware allows. Two honest qualifiers below.
+The speedup is now a **measured** number, not an estimate. (YOLOE runs on CPU here. CUDA is auto-selected when present; Apple-Silicon **MPS is deliberately not** — it's ~2× faster for detection but cannot load YOLOE's MobileCLIP text-prompt encoder, which uses float64, so it would break text grounding. Correctness wins.) Two honest qualifiers below.
 
 **Accuracy — agreement of YOLOE's box with two independent references**
 

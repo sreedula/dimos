@@ -30,16 +30,6 @@ from dimos.utils.logging_config import setup_logger
 logger = setup_logger()
 
 
-def _is_mps_available() -> bool:
-    """True if PyTorch's Apple-Silicon MPS backend is usable."""
-    try:
-        import torch
-
-        return bool(torch.backends.mps.is_available())
-    except Exception:
-        return False
-
-
 class YoloePromptMode(Enum):
     """YOLO-E prompt modes."""
 
@@ -98,9 +88,12 @@ class Yoloe2DDetector(Detector):
             self.device = device
         elif is_cuda_available():  # type: ignore[no-untyped-call]
             self.device = "cuda"
-        elif _is_mps_available():
-            self.device = "mps"
         else:
+            # NOTE: Apple-Silicon MPS is deliberately NOT auto-selected. YOLOE's
+            # MobileCLIP text-prompt encoder loads via torch.jit with float64
+            # weights, which MPS cannot convert ("MPS doesn't support float64"),
+            # so set_prompts would fail after the first inference moves the model
+            # to MPS. CPU is correct and reliable for the text-prompt path.
             self.device = "cpu"
 
     def set_prompts(
