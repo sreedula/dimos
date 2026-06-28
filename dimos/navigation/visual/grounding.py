@@ -46,6 +46,10 @@ logger = setup_logger()
 # preprocessing transform are built once on first use and reused thereafter.
 _clip_model: Any = None
 _clip_preprocess: Callable[..., Any] | None = None
+# Normalized CLIP text embeddings, cached per phrase. A phrase's embedding is
+# constant, so grounding the same attribute across frames ("the red mug") skips
+# the redundant text-encoder pass after the first call.
+_clip_text_cache: dict[str, Any] = {}
 
 
 def build_yoloe_grounding_detector(confidence: float = 0.6) -> Any | None:
@@ -320,13 +324,18 @@ def clip_scores(image, candidates: list[BBox], phrase: str) -> list[float]:
         crops.append(preprocess(PILImage.fromarray(crop)))
 
     batch = torch.stack(crops)
-    text = clip.tokenize([phrase])
+
+    # Text embedding is constant per phrase — encode once, then reuse.
+    text_features = _clip_text_cache.get(phrase)
+    if text_features is None:
+        with torch.no_grad():
+            encoded = model.encode_text(clip.tokenize([phrase]))
+            text_features = encoded / encoded.norm(dim=-1, keepdim=True)
+        _clip_text_cache[phrase] = text_features
 
     with torch.no_grad():
         image_features = model.encode_image(batch)
-        text_features = model.encode_text(text)
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
         # (N, D) @ (D, 1) -> (N, 1) cosine similarities, one row per crop.
         sims = (image_features @ text_features.T).squeeze(-1)
 

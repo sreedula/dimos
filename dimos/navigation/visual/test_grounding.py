@@ -510,6 +510,30 @@ def test_clip_reranks_real_bus_crops() -> None:
     assert select_by_clip(img, candidates, "a red bus") == left
 
 
+@pytest.mark.self_hosted
+def test_clip_text_embedding_is_cached() -> None:
+    """A repeated phrase reuses its cached text embedding (no re-encode)."""
+    from unittest import mock
+
+    from dimos.navigation.visual import grounding as g
+
+    img = Image.from_numpy(np.zeros((32, 32, 3), dtype=np.uint8), format=ImageFormat.BGR)
+    boxes = [(0.0, 0.0, 16.0, 16.0)]
+
+    g._clip_text_cache.pop("a teal box", None)
+    g.clip_scores(img, boxes, "a teal box")  # first call populates the cache
+    assert "a teal box" in g._clip_text_cache
+
+    # Second call with the same phrase must NOT touch the text encoder.
+    model, _ = g._load_clip()
+
+    def _fail_encode(*args, **kwargs):
+        raise AssertionError("text encoder re-ran for a cached phrase")
+
+    with mock.patch.object(model, "encode_text", _fail_encode):
+        g.clip_scores(img, boxes, "a teal box")  # image encode only; text is cached
+
+
 # --- Phase 6: natural-language parsing + unified resolver wiring ---
 
 
