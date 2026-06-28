@@ -172,6 +172,28 @@ def test_ground_with_yoloe_returns_none_for_absent_object(image: Image) -> None:
     assert ground_with_yoloe(detector, image, "banana") is None
 
 
+def test_ground_candidates_threads_confidence_override(image: Image) -> None:
+    """The per-call confidence reaches process_image only when supplied."""
+    received: list = []
+
+    class _Recorder:
+        def __init__(self) -> None:
+            self._prompt: str | None = None
+
+        def set_prompts(self, text: list[str] | None = None, bboxes=None) -> None:
+            self._prompt = text[0] if text else None
+
+        def process_image(self, image: Image, confidence: float | None = None) -> _FakeResult:
+            received.append(confidence)
+            return _FakeResult([_FakeDetection(self._prompt or "", 0.9, (1, 2, 3, 4))])
+
+    detector = _Recorder()
+    ground_candidates_with_yoloe(detector, image, "cup", confidence=0.25)
+    assert received[-1] == 0.25  # override forwarded
+    ground_candidates_with_yoloe(detector, image, "cup")
+    assert received[-1] is None  # default: detector's own confidence used
+
+
 def test_get_object_bbox_fast_path_returns_yolo_bbox_without_calling_vlm(image: Image) -> None:
     detector = _FakeDetector({"person": [_FakeDetection("person", 0.9, (10, 20, 30, 40))]})
     vl_model = _RaisingVlModel()  # raises if the VLM is touched
