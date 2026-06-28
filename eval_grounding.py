@@ -84,6 +84,7 @@ Like ``bench_grounding.py`` this is a standalone script, not a pytest target.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import statistics
 
@@ -418,8 +419,11 @@ def aggregate_and_print(records, n_images, class_present_pairs, gt_truth_label):
 
 
 def main() -> int:
-    print("Building YOLOE grounding detector (CPU)...")
-    detector = build_yoloe_grounding_detector()
+    # Confidence is overridable (EVAL_CONFIDENCE) so the recall/precision
+    # trade-off can be measured at different thresholds.
+    confidence = float(os.environ.get("EVAL_CONFIDENCE", "0.6"))
+    print(f"Building YOLOE grounding detector (CPU, confidence={confidence})...")
+    detector = build_yoloe_grounding_detector(confidence=confidence)
     if detector is None:
         print("FATAL: YOLOE detector unavailable; cannot evaluate.")
         return 1
