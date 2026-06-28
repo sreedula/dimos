@@ -14,7 +14,24 @@
 
 from uuid import UUID
 
-from dimos.utils.generic import short_id
+import pytest
+
+from dimos.utils.generic import extract_json_from_llm_response, short_id
+
+
+@pytest.mark.parametrize(
+    "response,expected",
+    [
+        ('{"name": "cup", "bbox": [1, 2, 3, 4]}', {"name": "cup", "bbox": [1, 2, 3, 4]}),
+        ('the box is {"name": "cup"} ok', {"name": "cup"}),
+        ("sorry, not found", None),  # no JSON
+        ("", None),  # empty
+        (None, None),  # model returned nothing (timeout/error) -> no crash
+        (123, None),  # non-string -> no crash
+    ],
+)
+def test_extract_json_from_llm_response(response, expected) -> None:
+    assert extract_json_from_llm_response(response) == expected
 
 
 def test_short_id_hello_world() -> None:

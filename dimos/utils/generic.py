@@ -60,6 +60,10 @@ def truncate_display_string(arg: Any, max: int | None = None) -> str:
 
 
 def extract_json_from_llm_response(response: str) -> Any:
+    # A model can return None/empty (timeout, refusal, error); treat that as "no
+    # JSON" rather than crashing on response.find().
+    if not isinstance(response, str):
+        return None
     start_idx = response.find("{")
     end_idx = response.rfind("}") + 1
 
