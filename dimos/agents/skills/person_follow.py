@@ -35,7 +35,7 @@ from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
-from dimos.navigation.visual.grounding import build_yoloe_grounding_detector
+from dimos.navigation.visual.grounding import build_yoloe_grounding_detector, resolve_grounding
 from dimos.navigation.visual.query import get_object_bbox
 from dimos.navigation.visual_servoing.detection_navigation import DetectionNavigation
 from dimos.navigation.visual_servoing.visual_servoing_2d import VisualServoing2D
@@ -291,15 +291,17 @@ class PersonFollowSkillContainer(Module):
         back onto the SAME instance (the nearest candidate) rather than a
         different person. Returns the recovered box, or ``None`` if grounding or
         re-segmentation failed (in which case the caller counts toward giving up).
+
+        Deliberately YOLOE-only (``resolve_grounding``), not ``get_object_bbox``:
+        this runs every lost frame in the ~20 Hz follow loop, and a VLM fallback
+        would stall it for seconds per frame — and the VLM can't see an occluded
+        person YOLOE missed anyway. A miss just means "still lost, try next frame".
         """
+        detector = self._get_grounding_detector()
+        if detector is None:
+            return None
         try:
-            bbox = get_object_bbox(
-                self._vl_model,
-                image,
-                query,
-                detector=self._get_grounding_detector(),
-                prev_box=prev_box,
-            )
+            bbox = resolve_grounding(detector, image, query, prev_box=prev_box)
         except Exception:
             logger.warning("Re-acquisition grounding failed.", exc_info=True)
             return None

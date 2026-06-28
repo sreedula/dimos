@@ -15,7 +15,7 @@
 """Unit tests for PersonFollow's tracking-loss recovery (``_reacquire``).
 
 Fully stubbed: a bare skill instance (no Module init), a fake EdgeTAM tracker,
-and a monkeypatched ``get_object_bbox`` — so no models, robot, or LCM bus.
+and a monkeypatched ``resolve_grounding`` — so no models, robot, or LCM bus.
 """
 
 from dimos.agents.skills import person_follow as pf
@@ -25,8 +25,8 @@ from dimos.agents.skills.person_follow import PersonFollowSkillContainer
 def _bare_skill():
     """A PersonFollowSkillContainer with only the fields ``_reacquire`` touches."""
     skill = object.__new__(PersonFollowSkillContainer)
-    skill._vl_model = object()  # stub; the patched get_object_bbox ignores it
-    skill._grounding_detector = None
+    skill._vl_model = object()  # never used: re-acquire is YOLOE-only (no VLM)
+    skill._grounding_detector = object()  # non-None: _reacquire grounds via YOLOE
     skill._grounding_detector_built = True  # so _get_grounding_detector skips building
     return skill
 
@@ -46,11 +46,11 @@ class _Tracker:
 def test_reacquire_returns_box_and_reinits_tracker(monkeypatch) -> None:
     seen = {}
 
-    def fake_get_object_bbox(vl_model, image, query, detector=None, prev_box=None):
+    def fake_resolve_grounding(detector, image, query, *, prev_box=None):
         seen["prev_box"] = prev_box
         return (10.0, 20.0, 30.0, 40.0)
 
-    monkeypatch.setattr(pf, "get_object_bbox", fake_get_object_bbox)
+    monkeypatch.setattr(pf, "resolve_grounding", fake_resolve_grounding)
     skill = _bare_skill()
     tracker = _Tracker(n_init=1)
 
@@ -62,7 +62,7 @@ def test_reacquire_returns_box_and_reinits_tracker(monkeypatch) -> None:
 
 
 def test_reacquire_returns_none_when_grounding_finds_nothing(monkeypatch) -> None:
-    monkeypatch.setattr(pf, "get_object_bbox", lambda *a, **k: None)
+    monkeypatch.setattr(pf, "resolve_grounding", lambda *a, **k: None)
     skill = _bare_skill()
     tracker = _Tracker(n_init=1)
 
@@ -71,7 +71,7 @@ def test_reacquire_returns_none_when_grounding_finds_nothing(monkeypatch) -> Non
 
 
 def test_reacquire_returns_none_when_resegmentation_fails(monkeypatch) -> None:
-    monkeypatch.setattr(pf, "get_object_bbox", lambda *a, **k: (1.0, 2.0, 3.0, 4.0))
+    monkeypatch.setattr(pf, "resolve_grounding", lambda *a, **k: (1.0, 2.0, 3.0, 4.0))
     skill = _bare_skill()
     tracker = _Tracker(n_init=0)  # tracker fails to segment the recovered box
 
@@ -82,7 +82,7 @@ def test_reacquire_swallows_grounding_exception(monkeypatch) -> None:
     def boom(*a, **k):
         raise RuntimeError("grounding blew up")
 
-    monkeypatch.setattr(pf, "get_object_bbox", boom)
+    monkeypatch.setattr(pf, "resolve_grounding", boom)
     skill = _bare_skill()
 
     # A grounding failure during recovery must not crash the follow loop.
