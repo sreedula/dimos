@@ -671,3 +671,58 @@ def test_resolve_grounding_ordinal_end_to_end(image: Image) -> None:
         70.0,
         20.0,
     )
+
+
+# --- Real-model integration (self_hosted: deselected by the default marker) ---
+
+
+class _TripwireVlModel:
+    """Fails the test if the VLM is touched; supplies a known bbox if it is."""
+
+    def __init__(self) -> None:
+        self.called = False
+
+    def query(self, image, query):
+        self.called = True
+        return '{"bbox": [1, 2, 3, 4]}'
+
+
+@pytest.mark.self_hosted
+def test_real_yoloe_routing_on_bus_image() -> None:
+    """End-to-end on bus.jpg with the real YOLOE model: spatial, ordinal, fallback."""
+    from pathlib import Path
+
+    import ultralytics
+
+    img = Image.from_file(str(Path(ultralytics.__file__).parent / "assets" / "bus.jpg"))
+    detector = build_yoloe_grounding_detector()
+    assert detector is not None
+
+    # Round to whole pixels: GPU/MPS inference is non-deterministic in the ~5th
+    # decimal between calls, so compare boxes at pixel resolution, not exact float.
+    def _px(b):
+        return tuple(round(v) for v in b)
+
+    persons = sorted(
+        (_px(b) for b in ground_candidates_with_yoloe(detector, img, "person")),
+        key=lambda b: (b[0] + b[2]) / 2,  # left-to-right by x-center
+    )
+    assert len(persons) >= 2  # bus.jpg has several people
+
+    # Spatial + ordinal selectors pick the geometrically-correct instance.
+    assert _px(resolve_grounding(detector, img, "the leftmost person")) == persons[0]
+    assert _px(resolve_grounding(detector, img, "the second person from the left")) == persons[1]
+    assert _px(resolve_grounding(detector, img, "the last person from the left")) == persons[-1]
+
+    # Fast-path hit: the VLM tripwire must stay untouched.
+    trip = _TripwireVlModel()
+    assert _px(get_object_bbox(trip, img, "the leftmost person", detector=detector)) == persons[0]
+    assert trip.called is False
+
+    # Miss ("banana") falls back to the VLM, which supplies the box.
+    trip2 = _TripwireVlModel()
+    bbox = get_object_bbox(trip2, img, "banana", detector=detector)
+    assert trip2.called is True
+    assert bbox == (1.0, 2.0, 3.0, 4.0)
+
+    detector.stop()
