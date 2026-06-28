@@ -1443,3 +1443,33 @@ def test_resolve_grounding_relational_attributed_object(image: Image, monkeypatc
         65.0,
         65.0,
     )
+
+
+def test_get_object_bboxes_attributed_filters_by_clip(image: Image, monkeypatch) -> None:
+    # "all the people in red": full phrase finds nothing -> ground "person", then
+    # CLIP keeps only the red-matching instance.
+    detector = _FakeDetector(
+        {
+            "person": [
+                _FakeDetection("person", 0.9, (0, 0, 10, 10)),  # "red"
+                _FakeDetection("person", 0.8, (20, 0, 30, 10)),  # not
+            ]
+        }
+    )
+    monkeypatch.setattr(grounding_mod, "clip_scores", lambda img, c, p: [0.9, 0.1][: len(c)])
+    boxes = get_object_bboxes(_RaisingVlModel(), image, "all the people in red", detector=detector)
+    assert boxes == [(0.0, 0.0, 10.0, 10.0)]
+
+
+def test_get_object_bboxes_no_attribute_returns_all(image: Image) -> None:
+    # No attribute -> every instance, no CLIP filtering.
+    detector = _FakeDetector(
+        {
+            "person": [
+                _FakeDetection("person", 0.9, (0, 0, 10, 10)),
+                _FakeDetection("person", 0.8, (20, 0, 30, 10)),
+            ]
+        }
+    )
+    boxes = get_object_bboxes(_RaisingVlModel(), image, "all the people", detector=detector)
+    assert boxes == [(0.0, 0.0, 10.0, 10.0), (20.0, 0.0, 30.0, 10.0)]

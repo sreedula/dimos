@@ -17,10 +17,9 @@ from dimos.models.qwen.bbox import BBox
 from dimos.models.vl.base import VlModel
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.navigation.visual.grounding import (
-    ground_candidates_for_completeness,
+    ground_all_instances,
     parse_grounding_query,
     resolve_grounding,
-    singularize,
     strip_quantifiers,
 )
 from dimos.utils.generic import extract_json_from_llm_response
@@ -108,18 +107,10 @@ def get_object_bboxes(
         try:
             object_phrase, _ = parse_grounding_query(object_description)
             # "all the chairs" / "every dog" / "the three people" -> bare class.
-            object_phrase = strip_quantifiers(object_phrase)
-            # Singularize the head noun so "people"/"chairs" ground as the class
-            # YOLOE knows ("person"/"chair").
-            words = object_phrase.split()
-            if words:
-                words[-1] = singularize(words[-1])
-                object_phrase = " ".join(words)
-            phrase = object_phrase or object_description
-            # Multi-object explicitly wants completeness, so ground at the
-            # recall-favoring confidence (measured: far more real instances at
-            # negligible localization cost) rather than the precision default.
-            boxes = ground_candidates_for_completeness(detector, image, phrase)
+            phrase = strip_quantifiers(object_phrase) or object_description
+            # Ground every instance at the recall-favoring confidence, handling
+            # attributed phrases ("all the people in red" -> the red people).
+            boxes = ground_all_instances(detector, image, phrase)
         except Exception:
             logger.warning(
                 "YOLOE multi-object grounding failed; falling back to the VLM.",

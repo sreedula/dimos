@@ -1031,6 +1031,25 @@ def ground_candidates_for_completeness(detector, image, description: str) -> lis
     )
 
 
+def ground_all_instances(detector, image, phrase: str) -> list[BBox]:
+    """Ground every instance of `phrase`'s class for multi-object queries.
+
+    The multi-object counterpart to :func:`resolve_grounding`'s recall ladder:
+    grounds at the recall-favoring confidence, falling back to the bare object
+    class for an attributive phrase ("person" for "people in red"), then — for a
+    prepositional attribute — keeps only the CLIP attribute matches ("all the
+    people in red" -> the red people, not everyone). The head noun is singularized
+    so plurals ground the class YOLOE knows.
+    """
+    target = _singularize_head(phrase)
+    boxes = ground_candidates_for_completeness(detector, image, target)
+    if not boxes and _is_attributive(target):
+        boxes = ground_candidates_for_completeness(detector, image, _object_class(target))
+    if len(boxes) > 1 and _has_attribute_preposition(target):
+        boxes = _narrow_by_attribute(image, boxes, target) or boxes
+    return boxes
+
+
 def resolve_grounding(
     detector, image, description: str, *, prev_box: BBox | None = None
 ) -> BBox | None:
