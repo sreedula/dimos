@@ -1400,3 +1400,44 @@ def test_select_by_attribute_and_position_falls_back_to_geometry_without_clip() 
 )
 def test_has_attribute_preposition(phrase: str, expected: bool) -> None:
     assert grounding_mod._has_attribute_preposition(phrase) == expected
+
+
+def test_resolve_grounding_relational_attributed_reference(image: Image) -> None:
+    # "red bus" is not a YOLOE class; the recall fallback must ground "bus" so the
+    # relation resolves instead of returning None.
+    detector = _FakeDetector(
+        {
+            "bus": [_FakeDetection("bus", 0.9, (0, 0, 100, 100))],  # center (50, 50)
+            "person": [
+                _FakeDetection("person", 0.9, (40, 40, 60, 60)),  # next to the bus
+                _FakeDetection("person", 0.8, (200, 200, 210, 210)),  # far away
+            ],
+        }
+    )
+    assert resolve_grounding(detector, image, "the person next to the red bus") == (
+        40.0,
+        40.0,
+        60.0,
+        60.0,
+    )
+
+
+def test_resolve_grounding_relational_attributed_object(image: Image, monkeypatch) -> None:
+    # "person in red" -> fallback grounds "person", then CLIP narrows to the
+    # red-matching one before the relation is resolved.
+    detector = _FakeDetector(
+        {
+            "bus": [_FakeDetection("bus", 0.9, (0, 0, 100, 100))],
+            "person": [
+                _FakeDetection("person", 0.9, (40, 40, 60, 60)),  # not "red"
+                _FakeDetection("person", 0.85, (45, 45, 65, 65)),  # "red"
+            ],
+        }
+    )
+    monkeypatch.setattr(grounding_mod, "clip_scores", lambda img, c, p: [0.1, 0.9][: len(c)])
+    assert resolve_grounding(detector, image, "the person in red next to the bus") == (
+        45.0,
+        45.0,
+        65.0,
+        65.0,
+    )

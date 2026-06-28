@@ -428,17 +428,37 @@ def select_by_attribute_and_position(
     """
     if not candidates:
         return None
+    narrowed = _narrow_by_attribute(image, candidates, phrase, scorer=scorer)
+    if narrowed is None:
+        logger.warning("CLIP unavailable; using geometry alone.", exc_info=True)
+        return select_by_position(candidates, qualifier)
+    return select_by_position(narrowed, qualifier)
+
+
+def _narrow_by_attribute(
+    image,
+    candidates: list[BBox],
+    phrase: str,
+    *,
+    scorer: Callable[[Any, list[BBox], str], list[float]] | None = None,
+) -> list[BBox] | None:
+    """Keep the candidates whose crop matches `phrase` by CLIP (>= mean score).
+
+    Returns the attribute-matching subset (the upper half by CLIP similarity), or
+    ``None`` if CLIP is unavailable or the scores are unusable — letting callers
+    fall back to no narrowing. Used to compose appearance with geometry/relations.
+    """
+    if not candidates:
+        return None
     score = scorer if scorer is not None else clip_scores
     try:
         scores = score(image, candidates, phrase)
     except Exception:
-        logger.warning("CLIP unavailable; using geometry alone.", exc_info=True)
-        return select_by_position(candidates, qualifier)
+        return None
     if not scores or len(scores) != len(candidates):
-        return select_by_position(candidates, qualifier)
+        return None
     mean = sum(scores) / len(scores)
-    kept = [c for c, s in zip(candidates, scores, strict=True) if s >= mean]
-    return select_by_position(kept or candidates, qualifier)
+    return [c for c, s in zip(candidates, scores, strict=True) if s >= mean] or candidates
 
 
 def box_iou(a: BBox, b: BBox) -> float:
@@ -839,6 +859,20 @@ def _has_attribute_preposition(phrase: str) -> bool:
     return any(prep in lowered for prep in _ATTRIBUTE_PREPS)
 
 
+def _ground_with_class_fallback(detector, image, phrase: str) -> list[BBox]:
+    """Ground `phrase` via the shared recall ladder: the full phrase, then the
+    bare object class for an attributive phrase ("person" for "person in red"),
+    then a low-confidence retry. Used by both the plain and relational paths so
+    attributed objects/references resolve the same way everywhere.
+    """
+    candidates = ground_candidates_with_yoloe(detector, image, phrase)
+    if not candidates and _is_attributive(phrase):
+        candidates = ground_candidates_with_yoloe(detector, image, _object_class(phrase))
+    if not candidates:
+        candidates = retry_at_lower_confidence(detector, image, phrase)
+    return candidates
+
+
 def _singularize_head(phrase: str) -> str:
     """Singularize the last word of a phrase ("red chairs" -> "red chair")."""
     words = phrase.split()
@@ -1031,20 +1065,21 @@ def resolve_grounding(
         relational = parse_relational_query(description)
         if relational is not None:
             object_phrase, relation, reference_phrase = relational
-            ref_class = _singularize_head(parse_grounding_query(reference_phrase)[0])
-            obj_class = _singularize_head(parse_grounding_query(object_phrase)[0])
+            ref_phrase = _singularize_head(parse_grounding_query(reference_phrase)[0])
+            obj_phrase = _singularize_head(parse_grounding_query(object_phrase)[0])
 
-            # Use the same recall retry as the other paths so a faint reference or
-            # object still resolves on the fast path instead of going to the VLM.
-            obj_candidates = ground_candidates_with_yoloe(detector, image, obj_class)
-            if not obj_candidates:
-                obj_candidates = retry_at_lower_confidence(detector, image, obj_class)
-
-            ref_candidates = ground_candidates_with_yoloe(detector, image, ref_class)
-            if not ref_candidates:
-                ref_candidates = retry_at_lower_confidence(detector, image, ref_class)
+            # Ground via the shared recall ladder so an attributed object or
+            # reference ("person in red next to the bus", "person next to the red
+            # bus") resolves to its class instead of falling to the VLM.
+            obj_candidates = _ground_with_class_fallback(detector, image, obj_phrase)
+            ref_candidates = _ground_with_class_fallback(detector, image, ref_phrase)
 
             if ref_candidates and obj_candidates:
+                # Compose attribute + relation: narrow the object to its CLIP
+                # attribute matches first (prepositional attribute only, as in the
+                # spatial path), then resolve the spatial relation.
+                if len(obj_candidates) > 1 and _has_attribute_preposition(obj_phrase):
+                    obj_candidates = _narrow_by_attribute(image, obj_candidates, obj_phrase) or obj_candidates
                 if relation == "near":
                     # Closest object to ANY reference instance (two laptops, etc.).
                     chosen = select_nearest_to_any_reference(obj_candidates, ref_candidates)
@@ -1063,17 +1098,10 @@ def resolve_grounding(
     # the class YOLOE knows ("chair"); non-plural -s words are left intact.
     object_phrase = _singularize_head(object_phrase)
 
-    candidates = ground_candidates_with_yoloe(detector, image, object_phrase)
-    if not candidates and _is_attributive(object_phrase):
-        # Open-vocab recall fallback: try the bare object class when the full
-        # phrase found nothing — "mug" for "red mug", but "person" for "person in
-        # red" (the class is before the preposition, not the last word).
-        candidates = ground_candidates_with_yoloe(detector, image, _object_class(object_phrase))
-    if not candidates:
-        # Last cheap try before the caller falls to the slow VLM: re-run YOLOE at
-        # a lower confidence to catch a faint/small object it skipped. Only fires
-        # on a miss, so the precision-oriented default is unchanged for hits.
-        candidates = retry_at_lower_confidence(detector, image, object_phrase)
+    # Recall ladder: the full phrase, then the bare object class for an
+    # attributive phrase ("mug" for "red mug", "person" for "person in red"),
+    # then a low-confidence retry — before the caller falls to the slow VLM.
+    candidates = _ground_with_class_fallback(detector, image, object_phrase)
     if not candidates:
         return None
 
