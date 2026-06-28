@@ -130,6 +130,38 @@ def test_ground_with_yoloe_returns_highest_confidence_detection(image: Image) ->
     assert bbox == (5.0, 6.0, 7.0, 8.0)  # the 0.95-confidence box
 
 
+class _ModeFakeDetector:
+    """Fake that tracks text vs visual-prompt mode, like the real detector."""
+
+    def __init__(self) -> None:
+        self._visual_prompts = None
+        self._prompt: str | None = None
+
+    def set_prompts(self, text: list[str] | None = None, bboxes=None) -> None:  # noqa: ANN001
+        if bboxes is not None:
+            self._visual_prompts = {"bboxes": bboxes}
+            self._prompt = None
+        else:
+            self._visual_prompts = None
+            self._prompt = text[0]
+
+    def process_image(self, image: Image) -> _FakeResult:
+        if self._visual_prompts is not None:
+            return _FakeResult([_FakeDetection("visual", 0.9, (0, 0, 1, 1))])
+        return _FakeResult([_FakeDetection(self._prompt or "", 0.9, (5, 6, 7, 8))])
+
+
+def test_ground_candidates_resets_text_when_detector_switched_to_visual(image: Image) -> None:
+    detector = _ModeFakeDetector()
+    # Ground a text prompt, populating the memo.
+    assert ground_candidates_with_yoloe(detector, image, "person") == [(5.0, 6.0, 7.0, 8.0)]
+    # Something else switches the detector to a visual (bbox) prompt.
+    detector.set_prompts(bboxes=[[1, 2, 3, 4]])
+    # Re-grounding the SAME text must re-set the text prompt, not return the
+    # stale visual-prompt detection.
+    assert ground_candidates_with_yoloe(detector, image, "person") == [(5.0, 6.0, 7.0, 8.0)]
+
+
 def test_ground_with_yoloe_returns_none_for_absent_object(image: Image) -> None:
     detector = _FakeDetector({"person": [_FakeDetection("person", 0.9, (1, 2, 3, 4))]})
 

@@ -111,8 +111,12 @@ def ground_candidates_with_yoloe(detector, image, description: str) -> list[BBox
         if nothing matched.
     """
     # Skip the costly text re-encode when the target hasn't changed since this
-    # detector's last call (the steady-state per-frame tracking path).
-    if getattr(detector, "_yoloe_grounder_prompt", None) != description:
+    # detector's last call (the steady-state per-frame tracking path). But always
+    # re-set if the detector was switched to a visual (bbox) prompt elsewhere,
+    # else the stale memo would let process_image run with the old visual prompt
+    # instead of grounding `description`.
+    in_visual_mode = getattr(detector, "_visual_prompts", None) is not None
+    if in_visual_mode or getattr(detector, "_yoloe_grounder_prompt", None) != description:
         detector.set_prompts(text=[description])
         detector._yoloe_grounder_prompt = description
 
