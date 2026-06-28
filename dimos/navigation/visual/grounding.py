@@ -635,6 +635,39 @@ def singularize(word: str) -> str:
     return word
 
 
+# Leading quantifiers/determiners to strip for multi-object grounding ("count the
+# X" / "all the X"), where the count is implicit (every instance is returned).
+# Longest-first so "all the" beats "all" and "a couple of" beats "a".
+_QUANTIFIERS: tuple[str, ...] = (
+    "all of the", "all the", "all", "both of the", "both", "every", "each",
+    "a couple of", "a couple", "a few of", "a few", "a number of", "a bunch of",
+    "a lot of", "lots of", "several", "many", "some of the", "some",
+    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "the", "a", "an",
+)
+_QUANTIFIER_RE = re.compile(
+    r"^\s*(?:\d+|"
+    + "|".join(re.escape(q) for q in sorted(_QUANTIFIERS, key=len, reverse=True))
+    + r")\s+",
+    re.IGNORECASE,
+)
+
+
+def strip_quantifiers(phrase: str) -> str:
+    """Remove leading quantifiers/numbers ("both", "the three", "several") from a
+    multi-object phrase, leaving the bare class ("both chairs" -> "chairs").
+
+    Applied repeatedly so stacked determiners collapse ("the three people" ->
+    "people"). Returns the phrase unchanged if it is entirely quantifiers.
+    """
+    out = phrase.strip()
+    prev = None
+    while prev != out and out:
+        prev = out
+        out = _QUANTIFIER_RE.sub("", out, count=1).strip()
+    return out or phrase.strip()
+
+
 # Ordinal words → 1-based rank ("last" handled specially by select_by_position).
 _ORDINALS: dict[str, str] = {
     "first": "1",

@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import re
 
 from dimos.models.qwen.bbox import BBox
 from dimos.models.vl.base import VlModel
@@ -22,6 +21,7 @@ from dimos.navigation.visual.grounding import (
     parse_grounding_query,
     resolve_grounding,
     singularize,
+    strip_quantifiers,
 )
 from dimos.utils.generic import extract_json_from_llm_response
 from dimos.utils.logging_config import setup_logger
@@ -107,13 +107,8 @@ def get_object_bboxes(
     if detector is not None:
         try:
             object_phrase, _ = parse_grounding_query(object_description)
-            # "all the chairs" / "every dog" -> ground the bare class.
-            object_phrase = re.sub(
-                r"^\s*(all of the|all the|all|every|each|the|a|an)\s+",
-                "",
-                object_phrase,
-                flags=re.IGNORECASE,
-            ).strip()
+            # "all the chairs" / "every dog" / "the three people" -> bare class.
+            object_phrase = strip_quantifiers(object_phrase)
             # Singularize the head noun so "people"/"chairs" ground as the class
             # YOLOE knows ("person"/"chair").
             words = object_phrase.split()

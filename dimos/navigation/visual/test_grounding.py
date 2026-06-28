@@ -43,6 +43,7 @@ from dimos.navigation.visual.grounding import (
     select_nearest,
     select_nearest_to_any_reference,
     singularize,
+    strip_quantifiers,
 )
 from dimos.navigation.visual.query import (
     get_object_bbox,
@@ -1229,3 +1230,36 @@ def test_parse_relational_query_strips_trailing_punctuation() -> None:
         "left",
         "the cup",
     )
+
+
+@pytest.mark.parametrize(
+    "phrase,expected",
+    [
+        ("all the people", "people"),
+        ("both chairs", "chairs"),
+        ("the three people", "people"),
+        ("several dogs", "dogs"),
+        ("a couple of bottles", "bottles"),
+        ("two cups", "cups"),
+        ("some of the cars", "cars"),
+        ("red chairs", "red chairs"),  # an attribute is not a quantifier
+        ("chairs", "chairs"),  # nothing to strip
+        ("all", "all"),  # entirely quantifier -> unchanged (falls back)
+    ],
+)
+def test_strip_quantifiers(phrase: str, expected: str) -> None:
+    assert strip_quantifiers(phrase) == expected
+
+
+def test_get_object_bboxes_strips_quantifier_to_class(image: Image) -> None:
+    # "both chairs" must ground the "chair" class, not the non-class "both chair".
+    detector = _FakeDetector(
+        {
+            "chair": [
+                _FakeDetection("chair", 0.9, (1, 2, 3, 4)),
+                _FakeDetection("chair", 0.8, (5, 6, 7, 8)),
+            ]
+        }
+    )
+    boxes = get_object_bboxes(_RaisingVlModel(), image, "both chairs", detector=detector)
+    assert boxes == [(1.0, 2.0, 3.0, 4.0), (5.0, 6.0, 7.0, 8.0)]
