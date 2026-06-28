@@ -18,10 +18,9 @@ from dimos.models.qwen.bbox import BBox
 from dimos.models.vl.base import VlModel
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.navigation.visual.grounding import (
-    ground_candidates_with_yoloe,
+    ground_candidates_for_completeness,
     parse_grounding_query,
     resolve_grounding,
-    retry_at_lower_confidence,
     singularize,
 )
 from dimos.utils.generic import extract_json_from_llm_response
@@ -122,11 +121,10 @@ def get_object_bboxes(
                 words[-1] = singularize(words[-1])
                 object_phrase = " ".join(words)
             phrase = object_phrase or object_description
-            boxes = ground_candidates_with_yoloe(detector, image, phrase)
-            if not boxes:
-                # Cheap recall retry at a lower confidence before the VLM, same
-                # as the single-object path.
-                boxes = retry_at_lower_confidence(detector, image, phrase)
+            # Multi-object explicitly wants completeness, so ground at the
+            # recall-favoring confidence (measured: far more real instances at
+            # negligible localization cost) rather than the precision default.
+            boxes = ground_candidates_for_completeness(detector, image, phrase)
         except Exception:
             logger.warning(
                 "YOLOE multi-object grounding failed; falling back to the VLM.",

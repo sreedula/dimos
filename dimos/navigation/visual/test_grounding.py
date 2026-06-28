@@ -958,12 +958,13 @@ def test_resolve_grounding_no_retry_when_found_at_default(image: Image) -> None:
     assert detector.confidence == 0.6
 
 
-def test_get_object_bboxes_retries_at_lower_confidence(image: Image) -> None:
-    # Multi-object path also does the cheap recall retry before the VLM.
+def test_get_object_bboxes_grounds_at_completeness_confidence(image: Image) -> None:
+    # Multi-object wants completeness, so it grounds at the lower recall
+    # confidence directly (here the object is only visible below 0.3).
     detector = _ConfFakeDetector(present_below=0.3)
     boxes = get_object_bboxes(_RaisingVlModel(), image, "all the bottles", detector=detector)
     assert boxes == [(1.0, 2.0, 3.0, 4.0)]
-    assert detector.confidence == 0.6  # restored
+    assert detector.confidence == 0.6  # restored after the lower-conf grounding
 
 
 @pytest.mark.self_hosted

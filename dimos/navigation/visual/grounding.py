@@ -815,6 +815,24 @@ def retry_at_lower_confidence(detector, image, description: str) -> list[BBox]:
         detector.confidence = original
 
 
+def ground_candidates_for_completeness(detector, image, description: str) -> list[BBox]:
+    """Ground all instances at a recall-favoring confidence (for "all the X").
+
+    Multi-object grounding explicitly wants completeness, so detect at the lower
+    recall threshold (measured on COCO128: many more real, well-localized
+    instances at negligible precision cost) rather than the precision default.
+    Grounds at ``min(detector.confidence, retry floor)`` and restores it.
+    """
+    original = getattr(detector, "confidence", None)
+    if original is None or original <= _RECALL_RETRY_CONFIDENCE:
+        return ground_candidates_with_yoloe(detector, image, description)
+    try:
+        detector.confidence = _RECALL_RETRY_CONFIDENCE
+        return ground_candidates_with_yoloe(detector, image, description)
+    finally:
+        detector.confidence = original
+
+
 def resolve_grounding(
     detector, image, description: str, *, prev_box: BBox | None = None
 ) -> BBox | None:
