@@ -77,7 +77,7 @@ class _FakeDetector:
 class _RaisingVlModel:
     """VL model stub that fails if its (slow) query path is ever taken."""
 
-    def query(self, image, query):  # noqa: ANN001
+    def query(self, image, query):
         raise AssertionError("vl_model.query must not be called on a YOLOE fast-path hit")
 
 
@@ -88,7 +88,7 @@ class _StubVlModel:
         self.response = response
         self.calls = 0
 
-    def query(self, image, query):  # noqa: ANN001
+    def query(self, image, query):
         self.calls += 1
         return self.response
 
@@ -168,7 +168,7 @@ class _BoomDetector:
     def set_prompts(self, text: list[str]) -> None:
         raise RuntimeError("detector model not loaded")
 
-    def process_image(self, image: Image):  # noqa: ANN201
+    def process_image(self, image: Image):
         raise RuntimeError("detector model not loaded")
 
 
@@ -316,7 +316,7 @@ def test_select_by_clip_picks_argmax_candidate_via_injected_scorer(image: Image)
 
     # Fake scorer: the middle box scores highest, so it must be chosen — without
     # loading CLIP at all.
-    def fake_scorer(img, candidates, phrase):  # noqa: ANN001, ANN202
+    def fake_scorer(img, candidates, phrase):
         assert candidates == boxes
         return [0.1, 0.9, 0.3]
 
@@ -325,7 +325,7 @@ def test_select_by_clip_picks_argmax_candidate_via_injected_scorer(image: Image)
 
 def test_select_by_clip_returns_none_on_empty(image: Image) -> None:
     # No candidates -> nothing to rank. The (default) scorer must never be called.
-    def _boom(img, candidates, phrase):  # noqa: ANN001, ANN202
+    def _boom(img, candidates, phrase):
         raise AssertionError("scorer must not run on empty candidates")
 
     assert select_by_clip(image, [], "red mug", scorer=_boom) is None
@@ -357,13 +357,11 @@ def test_ground_with_attribute_with_phrase_reranks_via_clip(image: Image, monkey
 
     # Stub the module-level clip_scores so select_by_clip re-ranks without CLIP:
     # the lower-confidence box scores highest and so must override confidence.
-    def fake_clip_scores(img, candidates, phrase):  # noqa: ANN001, ANN202
+    def fake_clip_scores(img, candidates, phrase):
         assert phrase == "red mug"
         return [0.2, 0.8]
 
-    monkeypatch.setattr(
-        "dimos.navigation.visual.grounding.clip_scores", fake_clip_scores
-    )
+    monkeypatch.setattr("dimos.navigation.visual.grounding.clip_scores", fake_clip_scores)
 
     assert ground_with_attribute(detector, image, "mug", phrase="red mug") == (
         0.0,

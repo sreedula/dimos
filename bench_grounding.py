@@ -56,11 +56,11 @@ from __future__ import annotations
 # model code is imported so every op stays on CPU (fair vs CPU-only YOLOE).
 import torch
 
-torch.backends.mps.is_available = lambda: False  # noqa: E305  (must precede model import)
+torch.backends.mps.is_available = lambda: False
 
+from pathlib import Path
 import statistics
 import time
-from pathlib import Path
 
 import ultralytics
 
@@ -175,13 +175,15 @@ def main() -> int:
     vl_model = create("moondream")
     moondream_ok = True
     moondream_reason = ""
-    print(f"moondream: building {vl_model.config.model_name} on device={vl_model.config.device} ...")
+    print(
+        f"moondream: building {vl_model.config.model_name} on device={vl_model.config.device} ..."
+    )
     try:
         t0 = time.perf_counter()
         warm = moondream_box(vl_model, cases[0][1], cases[0][2])
         warm_s = time.perf_counter() - t0
         print(f"moondream warmup OK in {warm_s:.0f}s (untimed); warmup box={warm}")
-    except Exception as e:  # noqa: BLE001 - report any load/inference failure honestly
+    except Exception as e:
         moondream_ok = False
         moondream_reason = f"{type(e).__name__}: {e}"
         print(f"moondream warmup FAILED: {moondream_reason}")
@@ -221,10 +223,17 @@ def main() -> int:
 
         rows.append(
             {
-                "q": q, "img": fname, "yolo_ms": yolo_ms, "md_ms": md_ms,
-                "speedup": speedup, "md_iou": md_iou, "yolo_bbox": yolo_bbox,
-                "md_bbox": md_bbox, "ref_bbox": ref_bbox,
-                "ref_iou": ref_iou, "ref_cd": ref_cd,
+                "q": q,
+                "img": fname,
+                "yolo_ms": yolo_ms,
+                "md_ms": md_ms,
+                "speedup": speedup,
+                "md_iou": md_iou,
+                "yolo_bbox": yolo_bbox,
+                "md_bbox": md_bbox,
+                "ref_bbox": ref_bbox,
+                "ref_iou": ref_iou,
+                "ref_cd": ref_cd,
             }
         )
 

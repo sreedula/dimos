@@ -6,9 +6,8 @@ warmup, so process_image is run 5 times and every timing is printed to make the
 warmup-vs-steady-state difference visible.
 """
 
-import os
-import time
 from pathlib import Path
+import time
 
 import ultralytics
 

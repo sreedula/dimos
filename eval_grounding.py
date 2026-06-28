@@ -84,8 +84,8 @@ Like ``bench_grounding.py`` this is a standalone script, not a pytest target.
 
 from __future__ import annotations
 
-import statistics
 from pathlib import Path
+import statistics
 
 import cv2
 
@@ -98,7 +98,7 @@ from dimos.navigation.visual.grounding import (
 # --- knobs ---------------------------------------------------------------------
 # Hard cap on images so a CPU run stays bounded; the actual evaluated count is
 # printed (never silently truncated). COCO128 has 128 images total.
-MAX_IMAGES = 40
+MAX_IMAGES = 128
 
 # Common, visually-unambiguous COCO classes to ground. Restricting to these keeps
 # the eval to objects a human label and an open-vocab prompt agree on cleanly
@@ -118,18 +118,86 @@ COCO128_URL = "https://ultralytics.com/assets/coco128.zip"
 
 # Standard COCO80 class names (used if coco128.yaml cannot be read).
 COCO80_NAMES = [
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
-    "truck", "boat", "traffic light", "fire hydrant", "stop sign",
-    "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
-    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag",
-    "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite",
-    "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
-    "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana",
-    "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza",
-    "donut", "cake", "chair", "couch", "potted plant", "bed", "dining table",
-    "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone",
-    "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock",
-    "vase", "scissors", "teddy bear", "hair drier", "toothbrush",
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "airplane",
+    "bus",
+    "train",
+    "truck",
+    "boat",
+    "traffic light",
+    "fire hydrant",
+    "stop sign",
+    "parking meter",
+    "bench",
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+    "backpack",
+    "umbrella",
+    "handbag",
+    "tie",
+    "suitcase",
+    "frisbee",
+    "skis",
+    "snowboard",
+    "sports ball",
+    "kite",
+    "baseball bat",
+    "baseball glove",
+    "skateboard",
+    "surfboard",
+    "tennis racket",
+    "bottle",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+    "chair",
+    "couch",
+    "potted plant",
+    "bed",
+    "dining table",
+    "toilet",
+    "tv",
+    "laptop",
+    "mouse",
+    "remote",
+    "keyboard",
+    "cell phone",
+    "microwave",
+    "oven",
+    "toaster",
+    "sink",
+    "refrigerator",
+    "book",
+    "clock",
+    "vase",
+    "scissors",
+    "teddy bear",
+    "hair drier",
+    "toothbrush",
 ]
 
 
@@ -188,7 +256,7 @@ def ensure_coco128() -> bool:
 
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         download(COCO128_URL, dir=str(DATA_DIR))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"[coco128] download failed: {exc}")
         return False
     return img_dir.is_dir() and lbl_dir.is_dir() and any(img_dir.glob("*.jpg"))
@@ -281,11 +349,12 @@ def aggregate_and_print(records, n_images, class_present_pairs, gt_truth_label):
     """Print per-class and headline aggregate metrics, all-vs-prominent."""
     print("\n" + "=" * 78)
     print(f"PER-CLASS — YOLOE grounding vs {gt_truth_label}")
-    print("  (all GT instances  |  prominent = GT box >= "
-          f"{PROMINENT_AREA_FRAC:.0%} of frame)")
+    print(f"  (all GT instances  |  prominent = GT box >= {PROMINENT_AREA_FRAC:.0%} of frame)")
     print("=" * 78)
-    print(f"{'class':<9} {'inst':>5} {'medIoU':>7} {'hit@.5':>7}   "
-          f"{'promInst':>8} {'medIoU':>7} {'hit@.5':>7}")
+    print(
+        f"{'class':<9} {'inst':>5} {'medIoU':>7} {'hit@.5':>7}   "
+        f"{'promInst':>8} {'medIoU':>7} {'hit@.5':>7}"
+    )
     print("-" * 78)
     for name in EVAL_CLASS_NAMES:
         rs = [r for r in records if r["class"] == name]
@@ -295,8 +364,7 @@ def aggregate_and_print(records, n_images, class_present_pairs, gt_truth_label):
         n_p, iou_p, hit_p = _cut_metrics([r for r in rs if r["prominent"]])
         ip = f"{iou_p:.2f}" if iou_p is not None else "  -"
         hp = f"{hit_p:.0%}" if hit_p is not None else "  -"
-        print(f"{name:<9} {n_a:>5} {iou_a:>7.2f} {hit_a:>7.0%}   "
-              f"{n_p:>8} {ip:>7} {hp:>7}")
+        print(f"{name:<9} {n_a:>5} {iou_a:>7.2f} {hit_a:>7.0%}   {n_p:>8} {ip:>7} {hp:>7}")
     print("-" * 78)
 
     n_instances = len(records)
@@ -314,26 +382,38 @@ def aggregate_and_print(records, n_images, class_present_pairs, gt_truth_label):
     print(f"images evaluated            : {n_images} (cap = {MAX_IMAGES})")
     print(f"classes evaluated           : {', '.join(EVAL_CLASS_NAMES)}")
     print(f"(image, present-class) pairs : {n_pairs}")
-    print(f"GT instances evaluated      : {n_instances} "
-          f"({n_p} prominent, {n_instances - n_p} tiny/background)")
+    print(
+        f"GT instances evaluated      : {n_instances} "
+        f"({n_p} prominent, {n_instances - n_p} tiny/background)"
+    )
     print("-" * 78)
     print("ALL GT instances (incl. COCO's exhaustive tiny annotations):")
     print(f"  median IoU vs ground truth : {iou_a:.2f}")
-    print(f"  hit-rate @ IoU>=0.5        : {hit_a:.0%} ({sum(r['hit'] for r in records)}/{n_instances})")
+    print(
+        f"  hit-rate @ IoU>=0.5        : {hit_a:.0%} ({sum(r['hit'] for r in records)}/{n_instances})"
+    )
     print("-" * 78)
-    print(f"PROMINENT targets (GT box >= {PROMINENT_AREA_FRAC:.0%} of frame — the grounding use case):")
+    print(
+        f"PROMINENT targets (GT box >= {PROMINENT_AREA_FRAC:.0%} of frame — the grounding use case):"
+    )
     if n_p:
         print(f"  median IoU vs ground truth : {iou_p:.2f}")
-        print(f"  hit-rate @ IoU>=0.5        : {hit_p:.0%} ({sum(r['hit'] for r in prominent)}/{n_p})")
+        print(
+            f"  hit-rate @ IoU>=0.5        : {hit_p:.0%} ({sum(r['hit'] for r in prominent)}/{n_p})"
+        )
     else:
         print("  (no prominent instances in evaluated subset)")
     print("-" * 78)
     if localized:
-        print(f"localization quality (median IoU over the {len(localized)} instances "
-              f"YOLOE found): {statistics.median(localized):.2f}")
+        print(
+            f"localization quality (median IoU over the {len(localized)} instances "
+            f"YOLOE found): {statistics.median(localized):.2f}"
+        )
     if n_pairs:
-        print(f"recall (present class found) : {n_pairs_returned / n_pairs:.0%} "
-              f"({n_pairs_returned}/{n_pairs} present classes returned >=1 box)")
+        print(
+            f"recall (present class found) : {n_pairs_returned / n_pairs:.0%} "
+            f"({n_pairs_returned}/{n_pairs} present classes returned >=1 box)"
+        )
     print("=" * 78)
 
 
@@ -356,17 +436,17 @@ def main() -> int:
         lbl_dir = COCO128_DIR / "labels" / "train2017"
         image_paths = sorted(img_dir.glob("*.jpg"))[:MAX_IMAGES]
         gt_label = "HUMAN ground truth (COCO128 labels)"
-        print(f"Path: REAL human GT. Found {len(sorted(img_dir.glob('*.jpg')))} "
-              f"COCO128 images; evaluating first {len(image_paths)}.")
+        print(
+            f"Path: REAL human GT. Found {len(sorted(img_dir.glob('*.jpg')))} "
+            f"COCO128 images; evaluating first {len(image_paths)}."
+        )
     else:
         # Fallback: proxy GT from a YOLO11 reference detector over bundled images.
         print("Path: FALLBACK (COCO128 unavailable) -> YOLO11 proxy GT.")
         from ultralytics import YOLO
 
         yolo11 = YOLO("yolo11s.pt")
-        sample_dir = Path(
-            __import__("ultralytics").__file__
-        ).parent / "assets"
+        sample_dir = Path(__import__("ultralytics").__file__).parent / "assets"
         image_paths = sorted(sample_dir.glob("*.jpg"))[:MAX_IMAGES]
         gt_label = "YOLO11 reference detector (inter-detector agreement, NOT human GT)"
         print(f"Found {len(image_paths)} sample images for proxy-GT eval.")
@@ -378,7 +458,7 @@ def main() -> int:
     for path in image_paths:
         try:
             img = load_bgr_image(path)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"  skip {path.name}: load failed ({exc})")
             continue
 

@@ -15,8 +15,8 @@ __all__ = ["ground_with_yoloe"]
 
 
 if __name__ == "__main__":
-    import time
     from pathlib import Path
+    import time
 
     import ultralytics
 

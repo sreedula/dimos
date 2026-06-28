@@ -30,8 +30,9 @@ cost is skipped and only the detection runs.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import re
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
@@ -272,8 +273,8 @@ def clip_scores(image, candidates: list[BBox], phrase: str) -> list[float]:
         return []
 
     import clip
-    import torch
     from PIL import Image as PILImage
+    import torch
 
     model, preprocess = _load_clip()
 
@@ -286,10 +287,10 @@ def clip_scores(image, candidates: list[BBox], phrase: str) -> list[float]:
         # Clamp to the frame and guard degenerate/empty boxes: a zero-area crop
         # would make PIL choke, so such a box falls back to the whole frame (it
         # simply scores uninformatively rather than crashing the batch).
-        ix1 = max(0, min(int(round(x1)), width - 1))
-        iy1 = max(0, min(int(round(y1)), height - 1))
-        ix2 = max(ix1 + 1, min(int(round(x2)), width))
-        iy2 = max(iy1 + 1, min(int(round(y2)), height))
+        ix1 = max(0, min(round(x1), width - 1))
+        iy1 = max(0, min(round(y1), height - 1))
+        ix2 = max(ix1 + 1, min(round(x2), width))
+        iy2 = max(iy1 + 1, min(round(y2), height))
         crop = rgb[iy1:iy2, ix1:ix2]
         if crop.size == 0:
             crop = rgb
@@ -374,9 +375,7 @@ def box_iou(a: BBox, b: BBox) -> float:
     return inter / union if union > 0.0 else 0.0
 
 
-def select_nearest(
-    candidates: list[BBox], prev_box: BBox, *, min_iou: float = 0.0
-) -> BBox | None:
+def select_nearest(candidates: list[BBox], prev_box: BBox, *, min_iou: float = 0.0) -> BBox | None:
     """Pick the candidate most consistent with `prev_box`, for frame-to-frame tracking.
 
     The tracking counterpart to :func:`select_by_position` and
