@@ -754,14 +754,26 @@ def parse_relational_query(description: str) -> tuple[str, str, str] | None:
 
 def select_by_nearest_to_reference(candidates: list[BBox], reference: BBox) -> BBox | None:
     """Return the candidate whose center is closest to the reference box's center."""
-    if not candidates:
+    return select_nearest_to_any_reference(candidates, [reference])
+
+
+def select_nearest_to_any_reference(candidates: list[BBox], references: list[BBox]) -> BBox | None:
+    """Return the candidate whose center is closest to ANY reference's center.
+
+    Handles multiple reference instances ("the cup near the laptop" when there are
+    two laptops): the object nearest to *whichever* reference is the natural match,
+    not just the one nearest the highest-confidence reference.
+    """
+    if not candidates or not references:
         return None
-    rx = (reference[0] + reference[2]) / 2.0
-    ry = (reference[1] + reference[3]) / 2.0
-    return min(
-        candidates,
-        key=lambda b: ((b[0] + b[2]) / 2.0 - rx) ** 2 + ((b[1] + b[3]) / 2.0 - ry) ** 2,
-    )
+    centers = [((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0) for r in references]
+
+    def min_dist_sq(b: BBox) -> float:
+        bx = (b[0] + b[2]) / 2.0
+        by = (b[1] + b[3]) / 2.0
+        return min((bx - cx) ** 2 + (by - cy) ** 2 for cx, cy in centers)
+
+    return min(candidates, key=min_dist_sq)
 
 
 def select_by_relation(candidates: list[BBox], relation: str, reference: BBox) -> BBox | None:
@@ -887,7 +899,13 @@ def resolve_grounding(
                 ref_candidates = retry_at_lower_confidence(detector, image, ref_class)
 
             if ref_candidates and obj_candidates:
-                chosen = select_by_relation(obj_candidates, relation, ref_candidates[0])
+                if relation == "near":
+                    # Closest object to ANY reference instance (two laptops, etc.).
+                    chosen = select_nearest_to_any_reference(obj_candidates, ref_candidates)
+                else:
+                    # Directional relations are ambiguous across multiple
+                    # references; resolve against the highest-confidence one.
+                    chosen = select_by_relation(obj_candidates, relation, ref_candidates[0])
                 if chosen is not None:
                     return chosen
             # Reference/object missing or nothing on that side: VLM resolves it.

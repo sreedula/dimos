@@ -41,6 +41,7 @@ from dimos.navigation.visual.grounding import (
     select_by_position,
     select_by_relation,
     select_nearest,
+    select_nearest_to_any_reference,
     singularize,
 )
 from dimos.navigation.visual.query import (
@@ -1144,3 +1145,35 @@ def test_yoloe_text_pe_cache_skips_reencode() -> None:
     assert calls.count(("cup",)) == 1  # encoded once despite two set_prompts
     assert calls.count(("laptop",)) == 1
     detector.stop()
+
+
+def test_select_nearest_to_any_reference() -> None:
+    refs = [(0.0, 0.0, 10.0, 10.0), (100.0, 100.0, 110.0, 110.0)]  # centers (5,5),(105,105)
+    near_second = (102.0, 102.0, 108.0, 108.0)  # center (105,105)
+    far = (50.0, 50.0, 52.0, 52.0)
+    assert select_nearest_to_any_reference([far, near_second], refs) == near_second
+    assert select_nearest_to_any_reference([], refs) is None
+    assert select_nearest_to_any_reference([near_second], []) is None
+
+
+def test_resolve_grounding_relational_nearest_across_multiple_references(image: Image) -> None:
+    # Two laptops; the matching cup sits next to the LOWER-confidence one. The
+    # object closest to *any* reference must win, not the one near the top ref.
+    detector = _FakeDetector(
+        {
+            "laptop": [
+                _FakeDetection("laptop", 0.9, (0, 0, 20, 20)),  # top-conf, far from the cup
+                _FakeDetection("laptop", 0.8, (200, 200, 220, 220)),  # near the cup
+            ],
+            "cup": [
+                _FakeDetection("cup", 0.9, (205, 205, 215, 215)),  # next to laptop B
+                _FakeDetection("cup", 0.7, (100, 100, 110, 110)),  # nearer laptop A
+            ],
+        }
+    )
+    assert resolve_grounding(detector, image, "the cup near the laptop") == (
+        205.0,
+        205.0,
+        215.0,
+        215.0,
+    )
