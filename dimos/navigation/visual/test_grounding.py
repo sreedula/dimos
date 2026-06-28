@@ -937,8 +937,9 @@ class _ConfFakeDetector:
     def set_prompts(self, text: list[str] | None = None, bboxes=None) -> None:
         self._prompt = text[0] if text else None
 
-    def process_image(self, image: Image) -> _FakeResult:
-        if self.confidence <= self.present_below:
+    def process_image(self, image: Image, confidence: float | None = None) -> _FakeResult:
+        conf = self.confidence if confidence is None else confidence
+        if conf <= self.present_below:
             return _FakeResult([_FakeDetection(self._prompt or "", 0.3, (1, 2, 3, 4))])
         return _FakeResult([])
 
@@ -948,7 +949,7 @@ def test_resolve_grounding_retries_at_lower_confidence(image: Image) -> None:
     # recall retry should fire and find it.
     detector = _ConfFakeDetector(present_below=0.3)
     assert resolve_grounding(detector, image, "bottle") == (1.0, 2.0, 3.0, 4.0)
-    assert detector.confidence == 0.6  # restored after the retry
+    assert detector.confidence == 0.6  # never mutated (per-call override)
 
 
 def test_resolve_grounding_no_retry_when_found_at_default(image: Image) -> None:
@@ -964,7 +965,7 @@ def test_get_object_bboxes_grounds_at_completeness_confidence(image: Image) -> N
     detector = _ConfFakeDetector(present_below=0.3)
     boxes = get_object_bboxes(_RaisingVlModel(), image, "all the bottles", detector=detector)
     assert boxes == [(1.0, 2.0, 3.0, 4.0)]
-    assert detector.confidence == 0.6  # restored after the lower-conf grounding
+    assert detector.confidence == 0.6  # never mutated (per-call override)
 
 
 @pytest.mark.self_hosted
@@ -1081,10 +1082,11 @@ def test_resolve_grounding_relational_uses_recall_retry(image: Image) -> None:
         def set_prompts(self, text: list[str] | None = None, bboxes=None) -> None:
             self._prompt = text[0] if text else None
 
-        def process_image(self, image: Image) -> _FakeResult:
+        def process_image(self, image: Image, confidence: float | None = None) -> _FakeResult:
+            conf = self.confidence if confidence is None else confidence
             if self._prompt == "laptop":
                 return _FakeResult([_FakeDetection("laptop", 0.9, (100, 100, 140, 140))])
-            if self._prompt == "cup" and self.confidence <= 0.3:
+            if self._prompt == "cup" and conf <= 0.3:
                 return _FakeResult([_FakeDetection("cup", 0.3, (110, 110, 130, 130))])
             return _FakeResult([])
 
@@ -1095,7 +1097,7 @@ def test_resolve_grounding_relational_uses_recall_retry(image: Image) -> None:
         130.0,
         130.0,
     )
-    assert detector.confidence == 0.6  # restored
+    assert detector.confidence == 0.6  # never mutated (per-call override)
 
 
 @pytest.mark.self_hosted

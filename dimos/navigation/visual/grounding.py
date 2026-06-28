@@ -90,7 +90,9 @@ def build_yoloe_grounding_detector(
         return None
 
 
-def ground_candidates_with_yoloe(detector, image, description: str) -> list[BBox]:
+def ground_candidates_with_yoloe(
+    detector, image, description: str, confidence: float | None = None
+) -> list[BBox]:
     """Return all YOLOE match bboxes for `description`, highest-confidence first.
 
     The multi-candidate counterpart to :func:`ground_with_yoloe`: where that
@@ -120,7 +122,12 @@ def ground_candidates_with_yoloe(detector, image, description: str) -> list[BBox
         detector.set_prompts(text=[description])
         detector._yoloe_grounder_prompt = description
 
-    result = detector.process_image(image)
+    # Pass the per-call confidence only when overriding, so detectors whose
+    # process_image takes no confidence argument keep working.
+    if confidence is None:
+        result = detector.process_image(image)
+    else:
+        result = detector.process_image(image, confidence=confidence)
 
     detections = sorted(result.detections, key=lambda d: d.confidence, reverse=True)
     return [
@@ -801,18 +808,16 @@ _RECALL_RETRY_CONFIDENCE = 0.25
 def retry_at_lower_confidence(detector, image, description: str) -> list[BBox]:
     """Re-ground `description` once at a lower confidence; ``[]`` if not worthwhile.
 
-    The detector exposes a ``confidence`` attribute that ``process_image`` reads.
-    Temporarily lower it, ground again, and always restore it. Returns ``[]`` when
-    the detector has no such knob or is already at/below the retry floor.
+    Uses ``process_image``'s per-call confidence override (no shared-state
+    mutation, so it's safe under concurrency). Returns ``[]`` when the detector
+    has no ``confidence`` knob or is already at/below the retry floor.
     """
     original = getattr(detector, "confidence", None)
     if original is None or original <= _RECALL_RETRY_CONFIDENCE:
         return []
-    try:
-        detector.confidence = _RECALL_RETRY_CONFIDENCE
-        return ground_candidates_with_yoloe(detector, image, description)
-    finally:
-        detector.confidence = original
+    return ground_candidates_with_yoloe(
+        detector, image, description, confidence=_RECALL_RETRY_CONFIDENCE
+    )
 
 
 def ground_candidates_for_completeness(detector, image, description: str) -> list[BBox]:
@@ -821,16 +826,14 @@ def ground_candidates_for_completeness(detector, image, description: str) -> lis
     Multi-object grounding explicitly wants completeness, so detect at the lower
     recall threshold (measured on COCO128: many more real, well-localized
     instances at negligible precision cost) rather than the precision default.
-    Grounds at ``min(detector.confidence, retry floor)`` and restores it.
+    Uses the per-call confidence override (no shared-state mutation).
     """
     original = getattr(detector, "confidence", None)
     if original is None or original <= _RECALL_RETRY_CONFIDENCE:
         return ground_candidates_with_yoloe(detector, image, description)
-    try:
-        detector.confidence = _RECALL_RETRY_CONFIDENCE
-        return ground_candidates_with_yoloe(detector, image, description)
-    finally:
-        detector.confidence = original
+    return ground_candidates_with_yoloe(
+        detector, image, description, confidence=_RECALL_RETRY_CONFIDENCE
+    )
 
 
 def resolve_grounding(

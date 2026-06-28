@@ -138,16 +138,22 @@ class Yoloe2DDetector(Detector):
                 cls = np.arange(len(bboxes), dtype=np.int16)  # type: ignore[arg-type]
                 self._visual_prompts = {"bboxes": bboxes, "cls": cls}  # type: ignore[dict-item]
 
-    def process_image(self, image: Image) -> "ImageDetections2D[Any]":
+    def process_image(
+        self, image: Image, confidence: float | None = None
+    ) -> "ImageDetections2D[Any]":
         """
         Process an image and return detection results.
 
         Args:
             image: Input image
+            confidence: Optional per-call minimum confidence override; falls back
+                to the detector's ``self.confidence`` when ``None``. Lets a caller
+                run a single lower-confidence pass without mutating shared state.
 
         Returns:
             ImageDetections2D containing all detected objects
         """
+        conf = self.confidence if confidence is None else confidence
         source = image.to_opencv()
         # YOLOE needs 3-channel input; a grayscale frame (a robot camera can emit
         # one on an IR/mono mode or a glitch) would otherwise crash the model.
@@ -174,7 +180,7 @@ class Yoloe2DDetector(Detector):
                     results = self.model.predict(
                         source=source,
                         device=self.device,
-                        conf=self.confidence,
+                        conf=conf,
                         iou=self.iou_threshold,
                         verbose=False,
                         visual_prompts=self._visual_prompts,
@@ -186,7 +192,7 @@ class Yoloe2DDetector(Detector):
                 track_kwargs = {
                     "source": source,
                     "device": self.device,
-                    "conf": self.confidence,
+                    "conf": conf,
                     "iou": self.iou_threshold,
                     "persist": True,
                     "verbose": False,
