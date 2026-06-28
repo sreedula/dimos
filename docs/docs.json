@@ -119,6 +119,13 @@
             ]
           },
           {
+            "group": "Perception",
+            "pages": [
+              "capabilities/perception/readme",
+              "capabilities/perception/grounding-fastpath"
+            ]
+          },
+          {
             "group": "Teleoperation",
             "pages": [
               "capabilities/teleoperation/hosted"
