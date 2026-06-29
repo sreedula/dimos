@@ -81,6 +81,9 @@ def build_yoloe_grounding_detector(
             max_area_ratio=None,
             confidence=confidence,
             iou_threshold=iou_threshold,
+            # Grounding makes independent one-shot queries; stateless predict avoids
+            # the persistent tracker leaking state (drift/lag) between unrelated calls.
+            use_tracking=False,
         )
     except Exception:
         logger.warning(

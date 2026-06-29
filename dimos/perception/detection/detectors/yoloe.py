@@ -49,6 +49,7 @@ class Yoloe2DDetector(Detector):
         max_area_ratio: float | None = 0.3,
         confidence: float = 0.6,
         iou_threshold: float = 0.6,
+        use_tracking: bool = True,
     ) -> None:
         """
         Initialize YOLO-E 2D detector.
@@ -64,6 +65,12 @@ class Yoloe2DDetector(Detector):
                 recall (find smaller/occluded objects) at the cost of precision.
             iou_threshold: NMS IoU threshold (0-1]. Higher values keep more
                 overlapping boxes (useful for crowded scenes / touching objects).
+            use_tracking: Run the persistent tracker (``model.track``) when True;
+                run stateless ``model.predict`` when False. Tracking gives stable
+                IDs across a video stream, but for one-shot grounding (independent
+                queries) it leaks tracker state between calls — drift and
+                confirmation lag — so grounding builds the detector with
+                ``use_tracking=False`` for deterministic per-call results.
         """
         if model_name is None:
             if prompt_mode == YoloePromptMode.LRPC:
@@ -77,6 +84,7 @@ class Yoloe2DDetector(Detector):
         self.max_area_ratio = max_area_ratio
         self.confidence = confidence
         self.iou_threshold = iou_threshold
+        self.use_tracking = use_tracking
         # Cache of text-prompt embeddings (get_text_pe is a ~100ms encoder pass);
         # repeated/alternating prompts then skip the re-encode.
         self._text_pe_cache: dict[tuple[str, ...], Any] = {}
@@ -189,16 +197,23 @@ class Yoloe2DDetector(Detector):
                 finally:
                     inner_model.names = saved_names
             else:
-                track_kwargs = {
+                infer_kwargs = {
                     "source": source,
                     "device": self.device,
                     "conf": conf,
                     "iou": self.iou_threshold,
-                    "persist": True,
                     "verbose": False,
                 }
+
+                def _infer(kwargs):
+                    # Persistent tracker for streams; stateless predict for one-shot
+                    # grounding (no cross-call state leak).
+                    if self.use_tracking:
+                        return self.model.track(**kwargs, persist=True)  # type: ignore[arg-type]
+                    return self.model.predict(**kwargs)  # type: ignore[arg-type]
+
                 try:
-                    results = self.model.track(**track_kwargs)  # type: ignore[arg-type]
+                    results = _infer(infer_kwargs)
                 except Exception:
                     # A GPU/MPS backend op can be unsupported for a given input;
                     # fall back to CPU once (permanently for this detector)
@@ -211,8 +226,8 @@ class Yoloe2DDetector(Detector):
                         exc_info=True,
                     )
                     self.device = "cpu"
-                    track_kwargs["device"] = "cpu"
-                    results = self.model.track(**track_kwargs)  # type: ignore[arg-type]
+                    infer_kwargs["device"] = "cpu"
+                    results = _infer(infer_kwargs)
 
         detections = ImageDetections2D.from_ultralytics_result(image, results)
         return self._apply_filters(image, detections)

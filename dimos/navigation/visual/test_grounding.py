@@ -1554,3 +1554,24 @@ def test_resolve_grounding_relational_uses_single_detection(image: Image) -> Non
         105.0,
     )
     assert detector.process_calls == 1  # ONE detection for object + reference
+
+
+@pytest.mark.self_hosted
+def test_grounding_detector_is_stateless_and_deterministic() -> None:
+    """The grounding detector uses stateless predict, so repeated/interleaved
+    grounding gives identical results — no persistent-tracker drift or lag."""
+    from pathlib import Path
+
+    import ultralytics
+
+    detector = build_yoloe_grounding_detector(confidence=0.25)
+    assert detector is not None
+    assert detector.use_tracking is False  # grounding is one-shot, not a stream
+
+    img = Image.from_file(str(Path(ultralytics.__file__).parent / "assets" / "bus.jpg"))
+    counts = []
+    for _ in range(3):
+        ground_candidates_with_yoloe(detector, img, "bus")  # unrelated query between
+        counts.append(len(ground_candidates_with_yoloe(detector, img, "person")))
+    assert len(set(counts)) == 1, f"non-deterministic person counts: {counts}"
+    detector.stop()
