@@ -31,6 +31,7 @@ from dimos.navigation.visual.grounding import (
     box_iou,
     build_yoloe_grounding_detector,
     ground_candidates_with_yoloe,
+    ground_multiple_classes,
     ground_with_attribute,
     ground_with_position,
     ground_with_tracking,
@@ -1502,3 +1503,54 @@ def test_clamp_box_to_frame_guarantees_nonempty_in_bounds(box) -> None:
     ix1, iy1, ix2, iy2 = _clamp_box_to_frame(*box, 100, 100)
     assert 0 <= ix1 < ix2 <= 100
     assert 0 <= iy1 < iy2 <= 100
+
+
+class _MultiClassFake:
+    """Fake returning a fixed mixed-class detection set in ONE process call."""
+
+    def __init__(self, dets: list[_FakeDetection]) -> None:
+        self._dets = dets
+        self._prompt = None
+        self.process_calls = 0
+
+    def set_prompts(self, text: list[str] | None = None, bboxes=None) -> None:
+        self._prompt = tuple(text) if text else None
+
+    def process_image(self, image: Image, confidence: float | None = None) -> _FakeResult:
+        self.process_calls += 1
+        return _FakeResult(self._dets)
+
+
+def test_ground_multiple_classes_splits_by_name(image: Image) -> None:
+    detector = _MultiClassFake(
+        [
+            _FakeDetection("person", 0.9, (0, 0, 10, 10)),
+            _FakeDetection("bus", 0.8, (20, 20, 40, 40)),
+            _FakeDetection("person", 0.7, (50, 0, 60, 10)),
+            _FakeDetection("car", 0.6, (1, 1, 2, 2)),  # not requested -> excluded
+        ]
+    )
+    out = ground_multiple_classes(detector, image, ["person", "bus"])
+    assert out == {
+        "person": [(0.0, 0.0, 10.0, 10.0), (50.0, 0.0, 60.0, 10.0)],  # conf-sorted
+        "bus": [(20.0, 20.0, 40.0, 40.0)],
+    }
+    assert detector.process_calls == 1  # a single inference pass for both classes
+
+
+def test_resolve_grounding_relational_uses_single_detection(image: Image) -> None:
+    # Both classes come from ONE detection pass; relational picks the nearest.
+    detector = _MultiClassFake(
+        [
+            _FakeDetection("person", 0.9, (0, 0, 10, 10)),  # far from the bus
+            _FakeDetection("person", 0.8, (95, 95, 105, 105)),  # next to the bus
+            _FakeDetection("bus", 0.95, (90, 90, 110, 110)),  # center (100, 100)
+        ]
+    )
+    assert resolve_grounding(detector, image, "the person next to the bus") == (
+        95.0,
+        95.0,
+        105.0,
+        105.0,
+    )
+    assert detector.process_calls == 1  # ONE detection for object + reference

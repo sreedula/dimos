@@ -154,6 +154,42 @@ def ground_with_yoloe(detector, image, description: str) -> BBox | None:
     return candidates[0] if candidates else None
 
 
+def ground_multiple_classes(
+    detector, image, classes: list[str], confidence: float | None = None
+) -> dict[str, list[BBox]]:
+    """Detect several classes in ONE inference pass, split by class name.
+
+    Sets all class prompts at once and runs the detector a single time, then
+    groups the detections by name into ``{class: [bbox, ...]}`` (highest
+    confidence first). Far cheaper than grounding each class separately — one
+    detection instead of N — which is the hot path for relational queries
+    ("X near Y" grounds both X and Y). Classes are de-duplicated, order preserved.
+    """
+    wanted = list(dict.fromkeys(classes))
+    if not wanted:
+        return {}
+    # Same memo discipline as ground_candidates_with_yoloe, keyed by the class
+    # tuple so a later single-prompt call still re-sets correctly.
+    in_visual_mode = getattr(detector, "_visual_prompts", None) is not None
+    key = tuple(wanted)
+    if in_visual_mode or getattr(detector, "_yoloe_grounder_prompt", None) != key:
+        detector.set_prompts(text=wanted)
+        detector._yoloe_grounder_prompt = key
+
+    result = (
+        detector.process_image(image)
+        if confidence is None
+        else detector.process_image(image, confidence=confidence)
+    )
+
+    out: dict[str, list[BBox]] = {c: [] for c in wanted}
+    for det in sorted(result.detections, key=lambda d: d.confidence, reverse=True):
+        if det.name in out:
+            x1, y1, x2, y2 = det.bbox
+            out[det.name].append((float(x1), float(y1), float(x2), float(y2)))
+    return out
+
+
 def select_by_position(candidates: list[BBox], qualifier: str) -> BBox | None:
     """Pick one bbox from `candidates` by a geometric `qualifier`, model-free.
 
@@ -881,6 +917,14 @@ def _ground_with_class_fallback(detector, image, phrase: str) -> list[BBox]:
     then a low-confidence retry. Used by both the plain and relational paths so
     attributed objects/references resolve the same way everywhere.
     """
+    # A prepositional attribute ("person in red") never grounds as a YOLOE class,
+    # so detect the bare class directly and skip the doomed full-phrase pass — one
+    # detection instead of two.
+    if _has_attribute_preposition(phrase):
+        target = _object_class(phrase)
+        candidates = ground_candidates_with_yoloe(detector, image, target)
+        return candidates or retry_at_lower_confidence(detector, image, target)
+
     candidates = ground_candidates_with_yoloe(detector, image, phrase)
     if not candidates and _is_attributive(phrase):
         candidates = ground_candidates_with_yoloe(detector, image, _object_class(phrase))
@@ -1103,11 +1147,20 @@ def resolve_grounding(
             ref_phrase = _singularize_head(parse_grounding_query(reference_phrase)[0])
             obj_phrase = _singularize_head(parse_grounding_query(object_phrase)[0])
 
-            # Ground via the shared recall ladder so an attributed object or
-            # reference ("person in red next to the bus", "person next to the red
-            # bus") resolves to its class instead of falling to the VLM.
-            obj_candidates = _ground_with_class_fallback(detector, image, obj_phrase)
-            ref_candidates = _ground_with_class_fallback(detector, image, ref_phrase)
+            # Fast path: detect BOTH the object and reference classes in a single
+            # inference pass (set both prompts, run once, split by name) instead of
+            # two separate detections — roughly halves relational latency. Fall back
+            # to the per-class recall ladder for whichever side that didn't find
+            # (faint/attributed objects, "person in red next to the red bus").
+            obj_cls = _object_class(obj_phrase)
+            ref_cls = _object_class(ref_phrase)
+            by_class = ground_multiple_classes(detector, image, [obj_cls, ref_cls])
+            obj_candidates = by_class.get(obj_cls) or _ground_with_class_fallback(
+                detector, image, obj_phrase
+            )
+            ref_candidates = by_class.get(ref_cls) or _ground_with_class_fallback(
+                detector, image, ref_phrase
+            )
 
             if ref_candidates and obj_candidates:
                 # Compose attribute + relation: narrow the object to its CLIP
